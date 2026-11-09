@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Select the dependencies installed from `uv.lock` with `--extra`, `--all-extras`, `--group`, `--no-dev` and `--only-group`, or `extras` / `groups` in `[tool.wheelgap]`. Selections follow transitive extras and uv default groups, avoid checking unrelated workspace members, and preserve dependency paths in `--explain`. With no selectors, all extras and groups still count. (#87)
+
 - `--dockerfile` accepts quoted `--platform` values such as `FROM --platform="linux/arm64" python:3.13` (and rejects an unterminated quote). (#101, thanks [@Mr45401](https://github.com/Mr45401))
 - `--dockerfile` rejects stage names Docker rejects (e.g. `AS 1build` or `AS my@stage`) instead of accepting them. (#100, thanks [@chiragjangiir](https://github.com/chiragjangiir))
 - `--list-targets` shows the glibc 2.17 floor for non-x86 Linux targets (e.g. `glibc 2.17 to 2.36` for `linux-aarch64`), and the README targets table says so too. A `Pipfile.lock` or `pyodide-lock.json` that isn't a JSON object, or a Pipfile.lock entry with a non-string version, is now a clear error instead of an `AttributeError`. With `-q`, the lock note added in 0.6.2 only appears when some packages couldn't be re-checked. (#99)

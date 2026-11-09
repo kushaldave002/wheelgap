@@ -10,13 +10,15 @@ import sys
 import tomllib
 from pathlib import Path
 
+from packaging.utils import canonicalize_name
+
 from . import __version__
 from .api import running_python
-from .check import Row, Status, check, explain, has_sdist
+from .check import Row, Status, check, explain, has_sdist, reachable
 from .dockerfile import DockerfileError, read_dockerfile
 from .pyodide import PyodideLock, PyodideLockError, apply_bundled, check_targets, load_pyodide_lock
 from .pypi import check_index_url, fill_all, recheck_lock
-from .sources import Package, SourceError, load_inputs, pythons_outside_lock
+from .sources import Package, SourceError, UvSelection, load_inputs, pythons_outside_lock, select_uv_dependencies
 from .targets import (
     ALIASES,
     DEFAULT_ANDROID_API,
@@ -119,6 +121,13 @@ def make_parser() -> argparse.ArgumentParser:
         metavar="PATH_OR_HTTPS_URL",
         help="a Pyodide release's pyodide-lock.json: packages Pyodide ships itself count as available on -t pyodide",
     )
+    p.add_argument("--extra", action="append", metavar="NAME", help="include a uv project extra (repeatable)")
+    p.add_argument("--all-extras", action="store_true", help="include every uv project extra")
+    p.add_argument("--group", action="append", metavar="NAME", help="include a uv dependency group (repeatable)")
+    p.add_argument("--no-dev", action="store_true", help="exclude the default uv dev group")
+    p.add_argument(
+        "--only-group", action="append", metavar="NAME", help="check only a uv dependency group (repeatable)"
+    )
     p.add_argument(
         "--online", action="store_true", help="re-check lockfile packages against PyPI instead of trusting the lockfile"
     )
@@ -150,7 +159,7 @@ def make_parser() -> argparse.ArgumentParser:
 
 
 FAIL_ON = ("source", "missing")
-LIST_KEYS = ("python", "targets")
+LIST_KEYS = ("python", "targets", "extras", "groups")
 STR_KEYS = ("glibc", "musl", "macos", "ios", "android-api", "fail-on", "pyodide-lock")
 
 
@@ -582,6 +591,26 @@ def main(argv: list[str] | None = None) -> int:
         )
         check_index_url()
         sources = load_inputs(args.inputs or ["."])
+        extra_names = args.extra if args.extra is not None else config.get("extras")
+        group_names = args.group if args.group is not None else config.get("groups")
+        if args.only_group:
+            if args.extra is None:
+                extra_names = None
+            if args.group is None:
+                group_names = None
+        if args.no_dev and args.group is None and group_names is not None:
+            group_names = [name for name in group_names if canonicalize_name(name) != "dev"]
+        if extra_names is not None or group_names is not None or args.all_extras or args.no_dev or args.only_group:
+            select_uv_dependencies(
+                sources,
+                UvSelection(
+                    extras=frozenset(canonicalize_name(name) for name in extra_names or []),
+                    all_extras=args.all_extras,
+                    groups=frozenset(canonicalize_name(name) for name in group_names or []),
+                    no_dev=args.no_dev,
+                    only_groups=frozenset(canonicalize_name(name) for name in args.only_group or []),
+                ),
+            )
         fail_on = args.fail_on or config.get("fail-on", "source")
         pyodide_lock = None
         if args.pyodide_lock:
@@ -601,12 +630,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wheelgap: error: {type(e).__name__}: {e}", file=sys.stderr)
         return 2
 
-    packages = [p for s in sources for p in s.packages]
+    packages: list[Package] = []
+    needed_by_source: list[list[Package]] = []
+    for source in sources:
+        selected = (
+            set().union(*(reachable(source, target) for target in targets)) if source.uv_selection is not None else None
+        )
+        needed = [p for i, p in enumerate(source.packages) if selected is None or i in selected]
+        needed_by_source.append(needed)
+        packages.extend(needed)
     fill_all(packages, refresh=args.online)
     if not args.online:
-        for s in sources:
+        for s, needed in zip(sources, needed_by_source, strict=True):
             if outside := pythons_outside_lock(s, targets):
-                other, failed = recheck_lock(s.packages)
+                other, failed = recheck_lock(needed)
                 note = (
                     f"wheelgap: note: {s.label} is locked for Python {s.requires_python}, so it may be missing "
                     f"wheels for Python {', '.join(outside)}; looked its PyPI packages up on the index too"

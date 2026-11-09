@@ -62,6 +62,17 @@ class Package:
 Edge = tuple[str, str | None, str | None]
 
 
+@dataclass(frozen=True)
+class UvSelection:
+    """Explicit installation selection. None on a Source keeps the conservative all-dependencies walk."""
+
+    extras: frozenset[str] = frozenset()
+    all_extras: bool = False
+    groups: frozenset[str] = frozenset()
+    no_dev: bool = False
+    only_groups: frozenset[str] = frozenset()
+
+
 @dataclass
 class Source:
     label: str
@@ -75,6 +86,13 @@ class Source:
     root_groups: dict[int, str] = field(default_factory=dict)
     # uv.lock only: the project's requires-python. uv keeps only the wheels that can serve it.
     requires_python: str | None = None
+    # Retain uv edge provenance for an explicit installation selection. The existing flattened
+    # graph remains untouched, preserving conservative behavior when no selectors are supplied.
+    uv_packages: list[dict] | None = None
+    uv_manifest: dict = field(default_factory=dict)
+    uv_pyproject: Path | None = None
+    uv_default_groups: list[str] = field(default_factory=lambda: ["dev"])
+    uv_selection: UvSelection | None = None
 
 
 def pythons_outside_lock(source: Source, targets: Iterable[Target]) -> list[str]:
@@ -130,7 +148,8 @@ def parse_uv_lock(path: Path) -> Source:
     manifest = data.get("manifest", {})
     members = {canonicalize_name(m) for m in manifest.get("members", [])}
     edges: dict[int, list[Edge]] = {}
-    source = Source(path.name, edges=edges)
+    source = Source(path.name, edges=edges, uv_packages=data.get("package", []), uv_manifest=manifest)
+    source.uv_pyproject = path.with_name("pyproject.toml")
     for p in data.get("package", []):
         src = p.get("source", {})
         pkg = Package(p["name"], p.get("version"), origin=path.name)
@@ -160,6 +179,68 @@ def parse_uv_lock(path: Path) -> Source:
     if isinstance(data.get("requires-python"), str):
         source.requires_python = data["requires-python"]
     return source
+
+
+def uv_selected_roots(source: Source) -> list[int]:
+    # A rooted workspace syncs its project, not every sibling member. With no project
+    # (a virtual workspace), all member roots remain eligible, as with uv sync.
+    packages = source.uv_packages or []
+    project = [
+        i
+        for i in source.roots
+        if any(packages[i].get("source", {}).get(kind) == "." for kind in ("editable", "virtual"))
+    ]
+    return project or source.roots
+
+
+def uv_extra_names(package: dict) -> frozenset[str]:
+    # uv omits empty optional-dependency groups from the graph, but records their names here.
+    return frozenset(canonicalize_name(name) for name in package.get("optional-dependencies", {})) | frozenset(
+        canonicalize_name(name) for name in package.get("metadata", {}).get("provides-extras", [])
+    )
+
+
+def uv_group_names(package: dict) -> frozenset[str]:
+    return frozenset(canonicalize_name(name) for name in package.get("dev-dependencies", {})) | frozenset(
+        canonicalize_name(name) for name in package.get("metadata", {}).get("requires-dev", {})
+    )
+
+
+def select_uv_dependencies(sources: list[Source], selection: UvSelection) -> None:
+    if selection.only_groups and (selection.extras or selection.all_extras):
+        raise SourceError("--only-group cannot be combined with --extra or --all-extras")
+    if selection.no_dev and "dev" in selection.groups | selection.only_groups:
+        raise SourceError("--no-dev cannot be combined with an explicit dev group")
+    if not sources or any(source.uv_packages is None for source in sources):
+        raise SourceError("extra/group selection requires uv.lock inputs")
+    for source in sources:
+        pyproject = source.uv_pyproject
+        if pyproject is not None and pyproject.is_file():
+            uv = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("tool", {}).get("uv", {})
+            defaults = uv.get("default-groups", ["dev"])
+            if defaults == "all":
+                source.uv_default_groups = ["*"]
+            elif isinstance(defaults, list) and all(isinstance(g, str) for g in defaults):
+                source.uv_default_groups = [canonicalize_name(g) for g in defaults]
+            else:
+                raise SourceError(f"{pyproject}: [tool.uv] default-groups must be a list of strings or 'all'")
+        if source.edges is None:
+            raise SourceError(f"{source.label}: cannot select extras/groups without project or manifest roots")
+        packages = source.uv_packages or []
+        roots = uv_selected_roots(source)
+        extras = frozenset(name for i in roots for name in uv_extra_names(packages[i]))
+        groups: set[str] = {canonicalize_name(name) for name in source.uv_manifest.get("dependency-groups", {})}
+        groups.update(frozenset().union(*(uv_group_names(packages[i]) for i in roots)))
+        unknown_defaults = set(source.uv_default_groups) - groups - {"dev", "*"}
+        if unknown_defaults:
+            raise SourceError(f"{source.label}: unknown default groups: {', '.join(sorted(unknown_defaults))}")
+        for label, unknown in (
+            ("extras", selection.extras - extras),
+            ("groups", (selection.groups | selection.only_groups) - groups),
+        ):
+            if unknown:
+                raise SourceError(f"{source.label}: unknown {label}: {', '.join(sorted(unknown))}")
+        source.uv_selection = selection
 
 
 def parse_pylock(path: Path) -> Source:
