@@ -3,7 +3,6 @@
 ## Unreleased
 
 - Select the dependencies installed from `uv.lock` with `--extra`, `--all-extras`, `--group`, `--no-dev` and `--only-group`, or `extras` / `groups` in `[tool.wheelgap]`. Selections follow transitive extras and uv default groups, avoid checking unrelated workspace members, and preserve dependency paths in `--explain`. With no selectors, all extras and groups still count. (#160, thanks [@kushaldave002](https://github.com/kushaldave002))
-
 - `--ignore` (and `ignore = [...]` in `[tool.wheelgap]`) now prints a note on stderr when a name matches no package in any input, so a typo or a stale entry no longer hides silently. `-q` hides it; the exit code is unchanged. (#158, thanks [@bouhafara](https://github.com/bouhafara))
 - Show which targets have gaps in the text summary when checking multiple targets. (#157, thanks [@jwalith4418-Mj](https://github.com/jwalith4418-Mj))
 - Version ranges now select the newest matching release whose non-yanked files support the target's Python through `Requires-Python`, when all targets share one Python major/minor version. A target Python such as `3.8` counts as a current 3.8.x, so `>=3.8.1` admits it. Missing or invalid metadata remains unrestricted; runs checking different Python versions keep the existing selection behavior. (#156, thanks [@Swarneil1905](https://github.com/Swarneil1905))

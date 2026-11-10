@@ -88,46 +88,6 @@ targets = ["linux-x86_64", "linux-aarch64", "musl-aarch64"]
 glibc = "2.31"
 ```
 
-### Check the uv dependencies you actually install
-
-With no selection options, wheelgap keeps its conservative behavior: all project/workspace extras
-and dependency groups count. For `uv.lock` inputs, select a deployment's dependencies explicitly:
-
-```bash
-# Match a production uv sync --no-dev --extra api
-wheelgap uv.lock --no-dev --extra api -t linux-aarch64
-# Include every project extra, or add a dependency group
-wheelgap uv.lock --all-extras
-wheelgap uv.lock --group docs
-# Check only a group, without project dependencies or default groups
-wheelgap uv.lock --only-group docs
-```
-
-`--extra`, `--group` and `--only-group` are repeatable. Once any selector is used, the project runtime
-dependencies and uv's default groups (`dev` unless `[tool.uv].default-groups` changes it) count;
-project extras are included only when requested. `--no-dev` removes `dev`, while `--only-group`
-excludes project dependencies and default groups. Combine `--only-group` with `--group` to add more
-groups, but not with `--extra`/`--all-extras`. An explicit `dev` group conflicts with `--no-dev`.
-Unknown extra/group names and selection on non-uv inputs are errors.
-
-Default selections can also be configured:
-
-```toml
-[tool.wheelgap]
-extras = ["api"]
-groups = ["docs"]
-```
-
-CLI `--extra` and `--group` replace their corresponding configured lists. `--only-group` suppresses
-both configured lists, and `--no-dev` removes a configured `dev` group. Empty lists explicitly select
-no extras or additional groups. With selection enabled, rooted workspaces start at the root project;
-virtual workspaces start at their members. Dependency-requested extras are followed transitively,
-including local workspace dependencies, rather than enabling every extra of every dependency.
-
-Unresolved marker conditions (including uv's synthetic conflict markers and unknown OS releases)
-remain conservative: wheelgap can still report a possible gap rather than silently hide one.
-Selection itself needs no network. Index refreshes (`--online`, or a target outside the lockfile's
-`requires-python`) only look up packages in the selected graph.
 For uv projects, wheelgap also reads `[tool.uv] required-environments` as default targets:
 
 ```toml
@@ -167,7 +127,7 @@ armlib 1.4.0 on musl-aarch64: ● source
   armlib-1.4.0-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl  manylinux_2_17_aarch64 is a glibc wheel; musl (Alpine) needs musllinux
 ```
 
-For `uv.lock` inputs, `--explain` also shows why the package is installed at all: the shortest dependency path from your project (or from a dependency group, shown as `(dev group)`) to the gap package. Paths are worked out per target, since markers can pull a package in on one platform only. With `--json --explain`, each package gets a matching `via` object keyed by target, like `rejected`: `"via": {"win-arm64": ["myapp", "uvicorn", "uvloop"]}`. Other inputs have no dependency graph, so they show no path (and `"via": {}`).
+For `uv.lock` inputs, `--explain` also shows why the package is installed at all: the shortest dependency path from your project (or from a dependency group, shown as `(dev group)`) to the gap package. With extra/group selection it's a path the selection installs it through, not always the shortest. Paths are worked out per target, since markers can pull a package in on one platform only. With `--json --explain`, each package gets a matching `via` object keyed by target, like `rejected`: `"via": {"win-arm64": ["myapp", "uvicorn", "uvloop"]}`. Other inputs have no dependency graph, so they show no path (and `"via": {}`).
 
 In `--json` output, `results`, `rejected` and `via` are all keyed by target label: just the platform (`"linux-x86_64"`) when one Python is checked, or Python and platform (`"3.13 linux-x86_64"`) with several. The top-level `targets` list gives each target's `label`, `python` and `platform`, so a script can look the key up instead of building it:
 
@@ -192,6 +152,50 @@ If an input can't be read (a missing lockfile, an unknown target, a bad `[tool.w
 Use `--ignore psycopg2` for accepted gaps (repeatable or comma-separated, with case-insensitive package-name matching and equivalent hyphens, underscores and dots): matched packages are excluded from the table, counts and exit status, and listed as ignored in text (including quiet mode), JSON and Markdown. Set `ignore = ["psycopg2"]` in `[tool.wheelgap]` to use it by default; any `--ignore` flags replace the configured list rather than adding to it, and `--ignore ""` clears it for one run.
 
 Use `-q` / `--quiet` (or `quiet = true` in `[tool.wheelgap]`) to show only the gap summary and package names. Clean runs without ignored packages are silent, JSON and Markdown output are unchanged, and quiet text output cannot be combined with `--explain` (`--json --explain` and `--markdown --explain` work).
+
+### Check the uv dependencies you actually install
+
+With no selection options, wheelgap keeps its conservative behavior: all project/workspace extras
+and dependency groups count. For `uv.lock` inputs, select a deployment's dependencies explicitly:
+
+```bash
+# Match a production uv sync --no-dev --extra api
+wheelgap uv.lock --no-dev --extra api -t linux-aarch64
+# Include every project extra, or add a dependency group
+wheelgap uv.lock --all-extras
+wheelgap uv.lock --group docs
+# Check only a group, without project dependencies or default groups
+wheelgap uv.lock --only-group docs
+```
+
+`--extra`, `--group` and `--only-group` are repeatable. Once any selector is used, the project's runtime
+dependencies and uv's default groups (`dev` unless `[tool.uv].default-groups` changes it) count,
+unless `--only-group` is given;
+project extras are included only when requested. `--no-dev` removes `dev`, while `--only-group`
+excludes project dependencies and default groups. Combine `--only-group` with `--group` to add more
+groups, but not with `--extra`/`--all-extras`. An explicit `dev` group conflicts with `--no-dev`.
+Unknown extra/group names and selection on non-uv inputs are errors.
+
+Default selections can also be configured:
+
+```toml
+[tool.wheelgap]
+extras = ["api"]
+groups = ["docs"]
+```
+
+CLI `--extra` and `--group` replace their corresponding configured lists. `--only-group` suppresses
+both configured lists, and `--no-dev` removes a configured `dev` group. Empty lists explicitly select
+no extras or additional groups. With selection enabled, rooted workspaces start at the root project
+(members outside the selection aren't checked, and a note on stderr names them);
+virtual workspaces start at their members. Dependency-requested extras are followed transitively,
+including local workspace dependencies, rather than enabling every extra of every dependency.
+
+Unresolved marker conditions (including uv's synthetic conflict markers and unknown OS releases)
+remain conservative: wheelgap can still report a possible gap rather than silently hide one.
+Selection itself needs no network. Index refreshes (`--online`, or a target outside the lockfile's
+`requires-python`) only look up packages in the selected graph. Configured `extras` and `groups` only apply to `uv.lock` inputs; other inputs
+are checked as usual.
 
 ### Targets
 

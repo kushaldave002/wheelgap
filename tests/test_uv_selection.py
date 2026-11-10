@@ -417,3 +417,29 @@ def test_offline_selection_skips_narrow_lock_recheck(fixtures, tmp_path, capsys,
     assert main([str(tmp_path), "--offline", "--no-dev", "--json", "-t", "linux", "-p", "3.13"]) == 0
     assert "weren't re-checked" in capsys.readouterr().err
     assert fake_pypi == []
+
+
+def test_ignore_note_counts_packages_the_selection_leaves_out(fixtures, capsys, fake_pypi):
+    # devtool is in the lock but not installed with --no-dev: ignoring it isn't a typo.
+    main([str(fixtures / "uvselect"), "--no-dev", "--ignore", "devtool,nosuchpkg", "-t", "linux", "-p", "3.13"])
+    err = capsys.readouterr().err
+    assert "--ignore matches no package: nosuchpkg" in err
+    assert "devtool" not in err
+
+
+def test_configured_selection_leaves_other_inputs_alone(tmp_path, capsys, fake_pypi):
+    (tmp_path / "pyproject.toml").write_text('[tool.wheelgap]\nextras = ["api"]\ngroups = ["docs"]\n')
+    path = tmp_path / "requirements.txt"
+    path.write_text("purewheel==3.1\n")
+    assert main([str(path), "-t", "linux-x86_64", "-p", "3.13"]) == 0
+    assert "requires uv.lock" not in capsys.readouterr().err
+
+
+def test_selection_names_workspace_members_it_does_not_check(fixtures, capsys, fake_pypi):
+    args = [str(fixtures / "uvworkspace"), "-t", "linux", "-p", "3.13", "--json"]
+    main([*args, "--extra", "api", "--no-dev"])
+    err = capsys.readouterr().err
+    assert "workspace members outside it aren't checked" in err
+    assert "unusedmember" in err and "libpkg" not in err
+    main([*args, "--only-group", "docs"])
+    assert "workspace members" not in capsys.readouterr().err

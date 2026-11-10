@@ -27,6 +27,7 @@ from .sources import (
     load_inputs,
     pythons_outside_lock,
     select_uv_dependencies,
+    uv_selected_roots,
 )
 from .targets import (
     ALIASES,
@@ -757,7 +758,8 @@ def main(argv: list[str] | None = None) -> int:
                 group_names = None
         if args.no_dev and args.group is None and group_names is not None:
             group_names = [name for name in group_names if canonicalize_name(name) != "dev"]
-        if extra_names is not None or group_names is not None or args.all_extras or args.no_dev or args.only_group:
+        from_cli = args.extra is not None or args.group is not None or args.all_extras or args.no_dev
+        if from_cli or args.only_group or extra_names is not None or group_names is not None:
             select_uv_dependencies(
                 sources,
                 UvSelection(
@@ -767,6 +769,8 @@ def main(argv: list[str] | None = None) -> int:
                     no_dev=args.no_dev,
                     only_groups=frozenset(canonicalize_name(name) for name in args.only_group or []),
                 ),
+                # Configured extras/groups apply to uv.lock inputs only; on the command line they need one.
+                strict=bool(from_cli or args.only_group),
             )
         if args.offline:
             require_offline(sources)
@@ -795,6 +799,16 @@ def main(argv: list[str] | None = None) -> int:
 
     needed_by_source = [selected_packages(source, targets) for source in sources]
     packages = [package for needed in needed_by_source for package in needed]
+    for s, needed in zip(sources, needed_by_source, strict=True):
+        if s.uv_selection is not None and not s.uv_selection.only_groups and not quiet:
+            kept, start = {id(p) for p in needed}, set(uv_selected_roots(s))
+            members = {s.packages[i].name for i in s.roots if i not in start and id(s.packages[i]) not in kept}
+            if unchecked := sorted(members):
+                print(
+                    f"wheelgap: note: {s.label}: the selection checks the root project and what it installs; "
+                    f"workspace members outside it aren't checked: {', '.join(unchecked)}",
+                    file=sys.stderr,
+                )
     other_index = fill_all(packages, refresh=args.online, python=single_python(targets))
     if args.online and other_index and not quiet:
         print(
@@ -838,7 +852,7 @@ def main(argv: list[str] | None = None) -> int:
     raw_ignore = [name.strip() for item in ignore_names for name in item.split(",") if name.strip()]
     ignore = {canonicalize_name(name) for name in raw_ignore}
     if raw_ignore and not quiet:
-        known_keys = {p.key for p in packages}
+        known_keys = {p.key for s in sources for p in s.packages}  # every package read, selected or not
         unmatched = list(dict.fromkeys(name for name in raw_ignore if canonicalize_name(name) not in known_keys))
         if unmatched:
             print(f"wheelgap: note: --ignore matches no package: {', '.join(unmatched)}", file=sys.stderr)

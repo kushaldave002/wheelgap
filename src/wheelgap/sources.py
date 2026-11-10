@@ -206,14 +206,18 @@ def uv_group_names(package: dict) -> frozenset[str]:
     )
 
 
-def select_uv_dependencies(sources: list[Source], selection: UvSelection) -> None:
+def select_uv_dependencies(sources: list[Source], selection: UvSelection, strict: bool = True) -> None:
+    """Apply `selection` to the uv.lock sources. With strict (selectors from the command line), other inputs are an
+    error; otherwise (from [tool.wheelgap]) they're left as they are."""
     if selection.only_groups and (selection.extras or selection.all_extras):
         raise SourceError("--only-group cannot be combined with --extra or --all-extras")
     if selection.no_dev and "dev" in selection.groups | selection.only_groups:
         raise SourceError("--no-dev cannot be combined with an explicit dev group")
-    if not sources or any(source.uv_packages is None for source in sources):
+    if strict and (not sources or any(source.uv_packages is None for source in sources)):
         raise SourceError("extra/group selection requires uv.lock inputs")
     for source in sources:
+        if source.uv_packages is None:
+            continue
         pyproject = source.uv_pyproject
         if pyproject is not None and pyproject.is_file():
             uv = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("tool", {}).get("uv", {})
