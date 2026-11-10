@@ -356,7 +356,7 @@ def test_automatic_narrow_lock_rechecks_only_selected_packages(fixtures, tmp_pat
     (tmp_path / "uv.lock").write_text(lock)
     calls = []
 
-    def recheck(packages):
+    def recheck(packages, simple_index=None):
         calls.extend(p.name for p in packages)
         return 0, 0
 
