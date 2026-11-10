@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from wheelgap.scan import main, scan_targets
+from wheelgap.scan import DEFAULT_PYTHONS, main, scan_targets
 
 
 def write_top(tmp_path, names):
@@ -22,6 +22,17 @@ def test_scan_targets_add_pyodide_only_where_it_exists():
 
 def test_scan_targets_removes_duplicate_versions_in_order():
     assert scan_targets("3.14t,3.13,cp314t,3.13") == scan_targets("3.14t,3.13")
+
+
+def test_scan_defaults_include_python_315(fake_pypi, tmp_path, capsys):
+    top = write_top(tmp_path, ["purewheel"])
+    assert main(["--top-packages", str(top)]) == 0
+    labels = [target["label"] for target in json.loads(capsys.readouterr().out)["targets"]]
+    assert labels == [target.label(True) for target in scan_targets(DEFAULT_PYTHONS)]
+    for version in ("3.13", "3.14", "3.14t", "3.15", "3.15t"):
+        assert f"{version} linux-x86_64" in labels
+    assert "3.15 pyodide" not in labels
+    assert "3.15t pyodide" not in labels
 
 
 @pytest.mark.parametrize(

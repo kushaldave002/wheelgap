@@ -50,7 +50,7 @@ class Package:
     spec: str | None = None
     # Files of a pinned release that the index marks as yanked (see check.status_for).
     yanked: frozenset[str] = frozenset()
-    # uv.lock / pylock.toml: the index the lock says the package came from, e.g. https://pypi.org/simple.
+    # uv.lock / pylock.toml / poetry.lock: the index the lock says the package came from, e.g. https://pypi.org/simple.
     registry: str | None = None
 
     @property
@@ -293,10 +293,14 @@ def parse_poetry_lock(path: Path) -> Source:
         if src_type in ("git", "hg", "svn", "bzr", "directory", "file", "url"):
             pkg.skip = src_type
         else:
+            # A "legacy" source is a simple index: remember it so the package isn't looked up on PyPI.
+            url = p.get("source", {}).get("url")
+            pkg.registry = url if isinstance(url, str) else None
             entries = p.get("files")
             if entries is None:
                 entries = legacy_files.get(p["name"])
-            # No files recorded at all (old [metadata.hashes] locks): leave them for the index lookup.
+            # No files recorded at all (old [metadata.hashes] locks): PyPI packages are looked up on the index,
+            # packages from another index are skipped (fill_all).
             pkg.files = None if entries is None else [f for f in (_filename(e) for e in entries) if f]
         edges[len(pkgs)] = _poetry_edges(p)
         pkgs.append(pkg)
@@ -422,7 +426,10 @@ def _add_once(pkgs: list[Package], seen: dict[tuple[str, str | None], Package], 
     if first is None:
         seen[key] = pkg
         pkgs.append(pkg)
-    elif first.markers is not None:
+        return
+    if pkg.skip == "private index":
+        first.skip = pkg.skip  # Pipenv may pin the index in one category only: keep the name off pypi.org anyway
+    if first.markers is not None:
         first.markers = None if pkg.markers is None else first.markers + pkg.markers
 
 
@@ -471,6 +478,14 @@ def parse_pipfile_lock(path: Path) -> Source:
             raise SourceError(f"{path.name}: {key} isn't a package section")
     sections = [s for s in ("default", "develop") if s in data]
     sections += [key for key in data if key not in ("_meta", "default", "develop")]
+    meta = data.get("_meta")
+    sources = meta.get("sources") if isinstance(meta, dict) else None
+    # Pipenv writes "index": "<source name>" for a package pinned to one of the Pipfile's [[source]] entries.
+    source_urls = {
+        s["name"]: s["url"]
+        for s in (sources if isinstance(sources, list) else [])
+        if isinstance(s, dict) and isinstance(s.get("name"), str) and isinstance(s.get("url"), str)
+    }
     for section in sections:
         for name, p in data[section].items():
             if not isinstance(p, dict):
@@ -484,8 +499,18 @@ def parse_pipfile_lock(path: Path) -> Source:
             pkg.skip = next((kind for kind in ("git", "hg", "svn", "bzr", "path", "file") if kind in p), None)
             if pkg.skip is None and p.get("editable"):
                 pkg.skip = "editable"
+            index = p.get("index")
+            if pkg.skip is None and index is not None and not _is_public_pypi(source_urls.get(str(index))):
+                pkg.skip = "private index"  # don't send internal names to pypi.org, or check a namesake there
             _add_once(pkgs, seen, pkg)
     return Source(path.name, pkgs)
+
+
+def _is_public_pypi(url: str | None) -> bool:
+    try:
+        return url is not None and urlparse(url).hostname in ("pypi.org", "pypi.python.org")
+    except ValueError:  # e.g. "https://[bad/simple": not something we can call PyPI
+        return False
 
 
 def _pinned_version(req: Requirement) -> str | None:

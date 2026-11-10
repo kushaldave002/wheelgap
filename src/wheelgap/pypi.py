@@ -10,10 +10,11 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from typing import IO
 from urllib.parse import quote, urlparse
 
-from packaging.specifiers import SpecifierSet
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 
 from . import __version__
@@ -100,22 +101,35 @@ def _files(entries: object) -> list[dict]:
     return entries
 
 
-def _newest_matching(data: dict, spec: str) -> tuple[str, list[dict]] | None:
-    """The newest release that matches `spec` and has files that aren't yanked."""
+def _supports_python(entry: dict, python: str | None) -> bool:
+    """Missing or invalid Requires-Python metadata imposes no restriction."""
+    requires = entry.get("requires_python")
+    if python is None or not isinstance(requires, str):
+        return True
+    try:
+        # A real interpreter is on a later patch release than x.y.0 (pip compares sys.version_info[:3]),
+        # so `>=3.8.1` must admit 3.8 and `!=3.9.0` must admit 3.9: compare against a late patch.
+        return SpecifierSet(requires).contains(f"{python}.99")
+    except InvalidSpecifier:
+        return True
+
+
+def _newest_matching(data: dict, spec: str, python: str | None = None) -> tuple[str, list[dict]] | None:
+    """The newest matching release with non-yanked files supporting `python`, when supplied."""
     releases = data.get("releases")
     if not isinstance(releases, dict):
         # A mirror without the (deprecated) release list: fall back to the latest, if it matches.
         info, latest = data.get("info"), None
         if isinstance(info, dict):
             latest = info.get("version")
-        live = [e for e in _files(data.get("urls", [])) if not e.get("yanked")]
+        live = [e for e in _files(data.get("urls", [])) if not e.get("yanked") and _supports_python(e, python)]
         if isinstance(latest, str) and _in_spec(latest, spec) and live:
             return latest, live
         raise ValueError("no release list")  # reported as unknown, not as "can't install"
     usable = {}
     for text, entries in releases.items():
         try:
-            live = [e for e in _files(entries) if not e.get("yanked")]
+            live = [e for e in _files(entries) if not e.get("yanked") and _supports_python(e, python)]
             if live:
                 usable[Version(text)] = (text, live)
         except (InvalidVersion, ValueError):
@@ -144,7 +158,7 @@ def _not_found(base: str, name: str, version: str | None) -> str:
     return "not on index"
 
 
-def fill(pkg: Package) -> Package:
+def fill(pkg: Package, python: str | None = None) -> Package:
     base = index_url()
     name = quote(pkg.key)
     pinned = bool(pkg.version)
@@ -162,9 +176,9 @@ def fill(pkg: Package) -> Package:
             raise ValueError("not an object")
         if not pinned and pkg.spec:
             # A range (numpy>=1.26,<2): check the release an installer would pick, not the latest.
-            found = _newest_matching(data, pkg.spec)
+            found = _newest_matching(data, pkg.spec, python)
             if found is None:
-                pkg.error = f"no release matches {pkg.spec}"
+                pkg.error = f"no release matches {pkg.spec}" + (f" for Python {python}" if python else "")
                 return pkg
             pkg.version, urls = found
         else:
@@ -187,6 +201,16 @@ def fill(pkg: Package) -> Package:
 PYPI_SIMPLE = "https://pypi.org/simple"
 
 
+def is_pypi(registry: str | None) -> bool:
+    """Whether a package pinned to `registry` comes from PyPI: unset (the default index) or exactly PYPI_SIMPLE."""
+    return (registry or PYPI_SIMPLE).rstrip("/") == PYPI_SIMPLE
+
+
+def keeps_locked_files(p: Package) -> bool:
+    """Under --online, a package from another index keeps the files in the lock: PyPI doesn't know it."""
+    return not p.skip and p.files is not None and not is_pypi(p.registry)
+
+
 def recheck_lock(packages: list[Package]) -> tuple[int, int]:
     """Add the index's files to lockfile packages whose lock may be missing some (see pythons_outside_lock).
 
@@ -194,7 +218,7 @@ def recheck_lock(packages: list[Package]) -> tuple[int, int]:
     whose lookup fails stays as the lock described it. Returns (packages from other indexes, failed lookups).
     """
     locked = [p for p in packages if not p.skip and p.files is not None and p.version]  # pinned: same release
-    todo = [p for p in locked if (p.registry or PYPI_SIMPLE).rstrip("/") == PYPI_SIMPLE]
+    todo = [p for p in locked if is_pypi(p.registry)]
     saved = [p.files or [] for p in todo]
     fill_all(todo, refresh=True)
     failed = 0
@@ -207,9 +231,17 @@ def recheck_lock(packages: list[Package]) -> tuple[int, int]:
     return len(locked) - len(todo), failed
 
 
-def fill_all(packages: list[Package], refresh: bool = False, workers: int = 16) -> None:
-    todo = [p for p in packages if not p.skip and (refresh or p.files is None)]
-    if not todo:
-        return
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        list(pool.map(fill, todo))
+def fill_all(packages: list[Package], refresh: bool = False, workers: int = 16, python: str | None = None) -> int:
+    """Look packages up on PyPI. A package the lock says came from another index is never looked up: PyPI doesn't
+    know it. With refresh (--online) it keeps its locked files; with no files (an old poetry.lock) it is skipped as
+    a private index. `python` limits range resolution to releases supporting that interpreter.
+    Returns how many kept their locked files for that reason."""
+    for p in packages:
+        if p.files is None and not p.skip and not is_pypi(p.registry):
+            p.skip = "private index"  # the name is internal; a namesake on PyPI is another package
+    kept = {id(p) for p in packages if refresh and keeps_locked_files(p)}
+    todo = [p for p in packages if not p.skip and id(p) not in kept and (refresh or p.files is None)]
+    if todo:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(partial(fill, python=python), todo))
+    return len(kept)

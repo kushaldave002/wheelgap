@@ -364,3 +364,56 @@ def test_automatic_narrow_lock_rechecks_only_selected_packages(fixtures, tmp_pat
     assert main([str(tmp_path), "--no-dev", "--json", "-t", "linux", "-p", "3.13"]) == 0
     assert set(calls) == {"app", "common", "library", "librarybase", "one"}
     assert "locked for Python ==3.12.*" in capsys.readouterr().err
+
+
+def test_offline_selection_ignores_unselected_missing_artifacts(fixtures, tmp_path, capsys, fake_pypi):
+    lock = (
+        (fixtures / "uvselect" / "uv.lock")
+        .read_text()
+        .replace('sdist = { url = "https://example.invalid/gpu-1.0.tar.gz" }', "")
+    )
+    (tmp_path / "uv.lock").write_text(lock, encoding="utf-8")
+    arguments = [str(tmp_path), "--offline", "--json", "-t", "linux", "-p", "3.13"]
+    assert main([*arguments, "--no-dev"]) == 0
+    assert "gpu" not in {p["name"] for p in json.loads(capsys.readouterr().out)["packages"]}
+    assert main(arguments) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert next(p for p in report["packages"] if p["name"] == "gpu")["results"]["linux-x86_64"] == "missing"
+    assert fake_pypi == []
+
+
+def test_online_selection_preserves_private_index_and_python_context(fixtures, tmp_path, monkeypatch, capsys):
+    from wheelgap import pypi
+
+    lock = (
+        (fixtures / "uvselect" / "uv.lock")
+        .read_text()
+        .replace(
+            'name = "common"\nversion = "1.0"\nsource = { registry = "https://pypi.org/simple" }',
+            'name = "common"\nversion = "1.0"\nsource = { registry = "https://private.example/simple" }',
+        )
+    )
+    (tmp_path / "uv.lock").write_text(lock, encoding="utf-8")
+    calls = []
+
+    def fill(package, python=None):
+        calls.append((package.name, python))
+
+    monkeypatch.setattr(pypi, "fill", fill)
+    assert main([str(tmp_path), "--online", "--no-dev", "--json", "-t", "linux", "-p", "3.13"]) == 0
+    assert set(calls) == {("library", "3.13"), ("librarybase", "3.13"), ("one", "3.13")}
+    report = capsys.readouterr()
+    assert "kept the locked files of 1 package from other indexes" in report.err
+    assert "common" in {p["name"] for p in json.loads(report.out)["packages"]}
+
+
+def test_offline_selection_skips_narrow_lock_recheck(fixtures, tmp_path, capsys, fake_pypi):
+    lock = (
+        (fixtures / "uvselect" / "uv.lock")
+        .read_text()
+        .replace('requires-python = ">=3.11"', 'requires-python = "==3.12.*"')
+    )
+    (tmp_path / "uv.lock").write_text(lock, encoding="utf-8")
+    assert main([str(tmp_path), "--offline", "--no-dev", "--json", "-t", "linux", "-p", "3.13"]) == 0
+    assert "weren't re-checked" in capsys.readouterr().err
+    assert fake_pypi == []

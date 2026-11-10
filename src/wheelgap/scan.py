@@ -24,7 +24,7 @@ from .pypi import fetch_json
 from .targets import NATIVE_PLATFORMS, PYODIDE_PLATFORMS, Target, TargetError, build_targets, parse_python
 
 TOP_PACKAGES_URL = "https://hugovk.dev/top-pypi-packages/top-pypi-packages.min.json"
-DEFAULT_PYTHONS = "3.13,3.14,3.14t"
+DEFAULT_PYTHONS = "3.13,3.14,3.14t,3.15,3.15t"
 SCHEMA_VERSION = 1
 
 
