@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `--badge PATH` writes a [shields.io endpoint](https://shields.io/badges/endpoint-badge) file with how many of the checked targets have wheels for everything, such as `7/8 targets`: a target counts when nothing on it is `source` or `missing`, and any `unknown` result makes it `unknown`. It's written even when the check fails, so CI can publish it; docs/recipes.md shows a README badge from GitHub Pages. (#385, thanks [@kushaldave002](https://github.com/kushaldave002))
 - MCP: `check_package` now returns `last_with_wheel`, as `--explain --suggest --json` does: for each gap target no newer release has a wheel for, the newest older release that has one, so an agent can say which version to pin. (#373, thanks [@kushaldave002](https://github.com/kushaldave002))
 - `--dockerfile`: a global `ARG` for a name BuildKit sets itself (`TARGETARCH`, `TARGETPLATFORM`, `BUILDPLATFORM` and the rest) with no default now says the value is set by the build, not that a `--build-arg` value isn't read. One with a default is still used as BuildKit does: the default replaces the automatic value. (#371, thanks [@kushaldave002](https://github.com/kushaldave002))
 
