@@ -455,8 +455,13 @@ def _check_package(args: dict[str, Any]) -> dict[str, Any]:
         if dependencies:
             tree = check_package(name, version, targets, pyodide_locks=locks, deps=True)
             key = canonicalize_name(name)
-            result = next(r for r in tree if canonicalize_name(r.name) == key)
-            tree = [r for r in tree if r is not result]
+            asked = [r for r in tree if canonicalize_name(r.name) == key]
+            if not asked:
+                raise ToolError(f"{name}: the resolved tree doesn't include the package asked about")
+            # One Result per release picked; with several Pythons the package can resolve to more than one, and
+            # none of those is its own dependency.
+            result = asked[0]
+            tree = [r for r in tree if canonicalize_name(r.name) != key]
         else:
             result = check_package(name, version, targets, pyodide_locks=locks)
     except (PyodideLockError, SourceError) as e:  # a lock for a Python no pyodide target uses; an unsettled tree
