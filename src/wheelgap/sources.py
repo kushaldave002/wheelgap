@@ -175,8 +175,21 @@ class Source:
     pypi_only: bool = False
     # A project directory with pixi.lock as well as the lockfile that was picked: the pixi.lock, for a note.
     passed_over: Path | None = None
-    # Command-line or selected pyproject.toml requirements, including extras, for --deps.
+    # Requirements for --deps to resolve: package names on the command line, selected pyproject.toml
+    # requirements, or a requirements file's requirement lines.
     specs: list[str] = field(default_factory=list)
+    # A requirements file that looks like pip-compile output (--hash lines or `# via` comments): already
+    # pinned, so --deps has nothing to resolve.
+    compiled: bool = False
+    # A requirements file's -c constraints as clean index specifiers (key -> specifiers), for --deps to seed.
+    constraint_specs: dict[str, set[str]] = field(default_factory=dict)
+    # A requirements file's constraint problems (a marker, a non-index constraint, conflicting pins): the
+    # resolved package gets the error, as the requirement's own row does without --deps.
+    constraint_errors: dict[str, str] = field(default_factory=dict)
+    # A requirements file's constraints --deps can't apply the way pip does (a marker, a URL, an error): it refuses.
+    deps_blockers: list[str] = field(default_factory=list)
+    # A requirements file's --no-binary/--only-binary policy, applied to the resolved packages too.
+    format_control: _FormatControl | None = None
     # --deps (deps.py): per target, the packages installed and the dependency path to each, keyed by index into
     # `packages`. check() uses it in place of a lockfile's graph.
     deps_paths: dict[Target, dict[int, list[str]]] | None = None
@@ -1293,6 +1306,7 @@ _COMMENT_RE = re.compile(r"\s#")
 _FULL_LINE_COMMENT_RE = re.compile(r"^\s*#")
 _INCLUDE_RE = re.compile(r"^(?:-r|--requirement)(?:\s+|=)?(\S.*)$")
 _CONSTRAINT_RE = re.compile(r"^(?:-c(?:\s+|=)?|--constraint(?:\s+|=))(\S.*)$")
+_VIA_COMMENT_RE = re.compile(r"^#\s*via\b")
 
 
 # pip options that point at an index or a folder of distributions other than PyPI's (or turn PyPI off).
@@ -1428,10 +1442,22 @@ def parse_requirements(path: Path) -> Source:
     seen: dict[bool, set[Path]] = {False: set(), True: set()}  # requirement files, constraint files
     index_options: list[str] = []
     format_control = _FormatControl()
-    pkgs = _read_requirements(path, seen, constraints, index_options=index_options, format_control=format_control)
+    req_lines: list[str] = []
+    compiler_signs: list[str] = []
+    pkgs = _read_requirements(
+        path,
+        seen,
+        constraints,
+        index_options=index_options,
+        format_control=format_control,
+        req_lines=req_lines,
+        compiler_signs=compiler_signs,
+    )
     by_name: dict[str, list[Package]] = {}
     for entry in constraints:
         by_name.setdefault(entry.key, []).append(entry)
+    constraint_specs: dict[str, set[str]] = {}
+    constraint_errors: dict[str, str] = {}
     for pkg in pkgs:
         if pkg.skip or pkg.version or not (entries := by_name.get(pkg.key)):
             continue
@@ -1449,11 +1475,36 @@ def parse_requirements(path: Path) -> Source:
             for entry in entries:
                 spec &= SpecifierSet(entry.spec or "")
             pkg.spec = str(spec) or None
+        if pkg.error:
+            constraint_errors[pkg.key] = pkg.error
+    # A constraint on a package the file doesn't require only ever counts as a transitive dep's specifier,
+    # which --deps sees; a constraint the file already called out as broken is left to constraint_errors.
+    deps_blockers: list[str] = []
+    for entry in constraints:
+        # pip applies these only on some targets, or installs from elsewhere; --deps can't follow that yet.
+        if entry.markers:
+            deps_blockers.append(f"the constraint on {entry.name} has a marker")
+        elif entry.skip:
+            deps_blockers.append(f"the constraint on {entry.name} isn't an index release ({entry.skip})")
+        if entry.markers or entry.skip or entry.key in constraint_errors:
+            continue
+        # A bare name constrains nothing; a version or range does.
+        if specifier := f"=={entry.version}" if entry.version else entry.spec:
+            constraint_specs.setdefault(entry.key, set()).add(specifier)
     for pkg in pkgs:
         if not pkg.skip:
             pkg.no_binary, pkg.only_binary = format_control.policy(pkg.key)
     return Source(
-        path.name, pkgs, requirements=True, pypi_only=not index_options and not _nearby_config_names_an_index(path)
+        path.name,
+        pkgs,
+        requirements=True,
+        pypi_only=not index_options and not _nearby_config_names_an_index(path),
+        specs=req_lines,
+        compiled="hash" in compiler_signs,  # hash mode makes pip refuse anything unpinned: the file is complete
+        constraint_specs=constraint_specs,
+        constraint_errors=constraint_errors,
+        format_control=format_control,
+        deps_blockers=deps_blockers + [f"{key}: {error}" for key, error in constraint_errors.items()],
     )
 
 
@@ -1464,10 +1515,14 @@ def _read_requirements(
     constraint: bool = False,
     index_options: list[str] | None = None,
     format_control: _FormatControl | None = None,
+    req_lines: list[str] | None = None,
+    compiler_signs: list[str] | None = None,
     stack: dict[bool, set[Path]] | None = None,
 ) -> list[Package]:
     """`index_options` collects the lines that may point pip at another index: index options (--index-url,
-    --extra-index-url, --find-links, --no-index), includes that aren't read, and abbreviated include options."""
+    --extra-index-url, --find-links, --no-index), includes that aren't read, and abbreviated include options.
+    `req_lines` collects requirement lines that aren't constraints, for --deps; `compiler_signs` notes the
+    `--hash` options and `# via` comments that mark pip-compile output."""
     path = path.resolve()
     if stack is None:
         stack = {False: set(), True: set()}
@@ -1482,6 +1537,8 @@ def _read_requirements(
         # utf-8-sig: a byte order mark (Windows editors) mustn't hide an option on the first line.
         lines = _join_continued_lines(path.read_text(encoding="utf-8-sig"))
         for raw in lines:
+            if compiler_signs is not None and _VIA_COMMENT_RE.match(raw.lstrip()):
+                compiler_signs.append("via")  # pip-compile writes "# via <name>" comment lines
             line = _COMMENT_RE.split(raw, 1)[0].strip()  # " # note" or "<TAB># note"
             if not line or line.startswith("#"):
                 continue
@@ -1497,7 +1554,7 @@ def _read_requirements(
                 # Unread, it may name an index, so the input isn't PyPI-only.
                 if "://" not in target and "${" not in target:
                     _read_requirements(
-                        path.parent / target, seen, constraints, True, index_options, format_control, stack
+                        path.parent / target, seen, constraints, True, index_options, format_control, stack=stack
                     )
                 elif not already_seen and index_options is not None:
                     index_options.append(line)
@@ -1511,6 +1568,8 @@ def _read_requirements(
                         constraint,
                         index_options,
                         format_control,
+                        req_lines,
+                        compiler_signs,
                         stack,
                     )
                 )
@@ -1527,6 +1586,8 @@ def _read_requirements(
             if already_seen:
                 continue
             tokens = line.split()
+            if compiler_signs is not None and any(t == "--hash" or t.startswith("--hash=") for t in tokens):
+                compiler_signs.append("hash")
             # Drop --hash=sha256:... and "--hash sha256:..." (option and value as two tokens).
             line = " ".join(
                 t for k, t in enumerate(tokens) if not t.startswith("--hash") and (k == 0 or tokens[k - 1] != "--hash")
@@ -1542,6 +1603,8 @@ def _read_requirements(
                 append(Package(name, None, skip="url", origin=path.name))
                 continue
             append(requirement_to_package(line, path.name))
+            if req_lines is not None and not constraint:
+                req_lines.append(line)
     finally:
         stack[constraint].remove(path)
     return pkgs

@@ -27,7 +27,7 @@ from .badge import write_badge
 from .build import BuildInfo, describe, lookup_all, requires_for, shown
 from .check import CELL, EXPLAIN_LIMIT, Row, Status, check, explain, explain_lines, marker_holds, reachable
 from .constraints import write_constraints
-from .deps import Resolver, resolve_deps
+from .deps import Resolver, pinned_complete, resolve_deps
 from .dockerfile import DockerfileError, read_dockerfile
 from .github import github_annotations
 from .junit import write_junit
@@ -239,8 +239,8 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--deps",
         action="store_true",
-        help="for package names or pyproject.toml, also check what they install, resolved per target from "
-        "PyPI's metadata (looks each dependency up on pypi.org; a lockfile is exact)",
+        help="for package names, requirements files or pyproject.toml, also check what they install, resolved "
+        "per target from PyPI's metadata (looks each dependency up on pypi.org; a lockfile is exact)",
     )
     p.add_argument(
         "--suggest",
@@ -1655,7 +1655,7 @@ def _main(argv: list[str]) -> int:
             dependency_sources = [s for s in sources if s.specs or s.pyproject_extras is not None]
             if not dependency_sources:
                 raise SourceError(
-                    "--deps applies to package names on the command line or pyproject.toml; "
+                    "--deps applies to package names on the command line, requirements files or pyproject.toml; "
                     "a lockfile already lists what it installs"
                 )
             if offline:
@@ -1667,7 +1667,11 @@ def _main(argv: list[str]) -> int:
                     "--deps reads dependencies from PyPI's JSON API, which a simple index (--index-url, or "
                     "index-url in [tool.wheelgap]) doesn't have"
                 )
-            for source in pyproject_sources:
+            for source in dependency_sources:
+                # A command-line name is PyPI's by definition; a file may point pip elsewhere, where --deps
+                # can't see, so it refuses rather than answer for the wrong index.
+                if not (source.requirements or source.pyproject_extras is not None):
+                    continue
                 if not source.pypi_only:
                     raise SourceError(
                         f"{source.label}: the project configures an installer index or source; "
@@ -1680,6 +1684,18 @@ def _main(argv: list[str]) -> int:
                     )
             resolver = Resolver()
             for source in dependency_sources:
+                if pinned_complete(source):
+                    print(
+                        f"wheelgap: note: {source.label} already lists what it installs "
+                        "(every requirement pinned, with hashes); checking it as written",
+                        file=sys.stderr,
+                    )
+                    continue
+                if source.deps_blockers:
+                    raise SourceError(
+                        f"{source.label}: --deps can't follow this the way pip does ({source.deps_blockers[0]}), "
+                        "so check a lockfile instead (pip-compile, or uv pip compile)"
+                    )
                 resolve_deps(source, targets, resolver)
         if offline:
             require_offline(sources, offline_how, simple_index=index_url)
@@ -1718,12 +1734,13 @@ def _main(argv: list[str]) -> int:
 
     if args.deps and not quiet:
         count = len({p.key for s in sources if s.deps_paths is not None for p in s.packages if not p.skip})
-        print(
-            f"wheelgap: note: --deps resolved {count} package{'s' if count != 1 else ''} from PyPI's metadata, "
-            "taking the newest release that meets every constraint on each target; a lockfile (uv lock, "
-            "pip-compile) is exact",
-            file=sys.stderr,
-        )
+        if count:
+            print(
+                f"wheelgap: note: --deps resolved {count} package{'s' if count != 1 else ''} from PyPI's "
+                "metadata, taking the newest release that meets every constraint on each target; a lockfile "
+                "(uv lock, pip-compile) is exact",
+                file=sys.stderr,
+            )
     if not quiet:
         note_unpinned_requirements(sources)
         for source in sources:

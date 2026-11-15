@@ -18,7 +18,7 @@ wheelgap psycopg2 numpy==2.3.4    # package names, with or without a version
 | [`pdm.lock`](#pdmlock) | yes, if it lists files | no |
 | [`Pipfile.lock`](#pipfilelock) | no | no |
 | [`pixi.lock`](#pixilock) | no | no |
-| [requirements files](#requirements-files) | no | no |
+| [requirements files](#requirements-files) | no | with `--deps` (after 0.11.0) |
 | [`pyproject.toml`](#pyprojecttoml) | no | with `--deps` (after 0.11.0) |
 | [package names](#package-names) | no | with `--deps` |
 
@@ -243,6 +243,11 @@ are skipped.
 **Skipped:** editable lines (`-e`), local paths (lines starting with `.` or `/`) and URLs (`git+https://…`,
 `name @ https://…`). Other pip options in the file, such as `--index-url` or `--hash`, are ignored: use wheelgap's
 own [`--index-url`](cli.md#index-url) to look packages up on another index.
+
+**`--deps`:** with [`--deps`](cli.md#deps) a requirements file is resolved instead — every requirement line is a
+root, and the whole tree it installs is checked per target. Constraint files and `--no-binary` / `--only-binary`
+apply to the resolved packages too. A fully pinned file that already lists what it installs (`pip-compile` output
+with `--hash` lines or `# via` comments) needs no resolving: wheelgap says so and checks it as written.
 
 ## pyproject.toml
 

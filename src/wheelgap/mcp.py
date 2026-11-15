@@ -169,7 +169,12 @@ TOOLS: list[dict[str, Any]] = [
             "misses first (rejected_omitted counts any more), as wheelgap --json --explain does. With gaps, "
             "last_with_wheel maps each gap target no newer release has a wheel for to the newest older release that "
             "has one (a version to pin to), as --explain --suggest --json does; it's absent when nothing was looked "
-            "up. " + _STATUS_HELP
+            "up. With dependencies: true, also checks everything the package installs, resolved for each target "
+            "from PyPI's metadata as wheelgap --deps does: dependency_gaps lists each other package in the tree with "
+            "a gap, with its results, gaps and via (the path from this package to it on each gap target), "
+            "dependencies_checked counts the other packages checked, and ok is true only if nothing in the tree has "
+            "a gap. A tree that can't be settled without a backtracking resolver is an error, as on the command "
+            "line. " + _STATUS_HELP
         ),
         "inputSchema": {
             "type": "object",
@@ -188,6 +193,11 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "boolean",
                     "description": "Also return rejected (and via, always empty for one package): why each source "
                     "or missing target can't use the published wheels. Default: false.",
+                },
+                "dependencies": {
+                    "type": "boolean",
+                    "description": "Also check everything the package installs (its dependency tree, resolved from "
+                    "PyPI for each target, as --deps does) and return dependency_gaps. Default: false.",
                 },
             },
             "required": ["name"],
@@ -406,13 +416,19 @@ def _last_with_wheel(result: Result) -> dict[str, str] | None:
     return {t.label(True): v for t, v in found[key][0].last.items()}
 
 
+def _flag(args: dict[str, Any], key: str) -> bool:
+    value = args.get(key)
+    if value is None:  # absent or null: like the other optional arguments
+        return False
+    if not isinstance(value, bool):
+        raise ToolError(f"'{key}' must be true or false")
+    return value
+
+
 def _check_package(args: dict[str, Any]) -> dict[str, Any]:
     _check_keys("check_package", args)
-    explain = args.get("explain")
-    if explain is None:  # absent or null: like the other optional arguments
-        explain = False
-    if not isinstance(explain, bool):
-        raise ToolError("'explain' must be true or false")
+    explain = _flag(args, "explain")
+    dependencies = _flag(args, "dependencies")
     name = (_string(args, "name", required=True) or "").strip()
     if not _NAME_RE.fullmatch(name):
         raise ToolError(f"{name!r} isn't a package name: pass the name alone, and an exact version as 'version'")
@@ -434,9 +450,22 @@ def _check_package(args: dict[str, Any]) -> dict[str, Any]:
         raise ToolError(f"{lock_spec}: {e}" if isinstance(e, UnicodeDecodeError) else str(e)) from e
     except OSError as e:  # a lock path that can't be read
         raise ToolError(f"{lock_spec}: {e.strerror or e}") from e
+    tree: list[Result] = []
     try:
-        result: Result = check_package(name, version, targets, pyodide_locks=locks)
-    except PyodideLockError as e:  # a lock for a Python no pyodide target uses
+        if dependencies:
+            tree = check_package(name, version, targets, pyodide_locks=locks, deps=True)
+            key = canonicalize_name(name)
+            asked = [r for r in tree if canonicalize_name(r.name) == key]
+            if not asked:
+                raise ToolError(f"{name}: the resolved tree doesn't include the package asked about")
+            # One Result per release picked; with several Pythons the package can resolve to more than one, and
+            # none of those is its own dependency.
+            result = asked[0]
+            tree = [r for r in tree if canonicalize_name(r.name) != key]
+        else:
+            result = check_package(name, version, targets, pyodide_locks=locks)
+            asked = [result]
+    except (PyodideLockError, SourceError) as e:  # a lock for a Python no pyodide target uses; an unsettled tree
         raise ToolError(str(e)) from e
     out: dict[str, Any] = result.to_dict(explain=explain)
     if explain:  # as many wheels per cell as --explain's text shows, so a reply stays small
@@ -446,8 +475,30 @@ def _check_package(args: dict[str, Any]) -> dict[str, Any]:
             if len(wheels) > EXPLAIN_LIMIT
         }
         out["rejected"] = {label: wheels[:EXPLAIN_LIMIT] for label, wheels in out["rejected"].items()}
-    out["ok"] = result.ok
-    out["gaps"] = [t.label(True) for t in result.gaps]
+    # With several Pythons the package can resolve to a release per Python: its rows together are its answer.
+    statuses: dict[Any, Status] = {}
+    for r in asked:
+        for t, s in r.statuses.items():
+            if s is not Status.NOT_NEEDED or t not in statuses:
+                statuses[t] = s
+    if len(asked) > 1:
+        out["results"] = {t.label(True): s.value for t, s in statuses.items()}
+        out["versions"] = sorted({r.version for r in asked if r.version})
+    out["ok"] = all(r.ok for r in asked) and all(r.ok for r in tree)
+    out["gaps"] = list(dict.fromkeys(t.label(True) for r in asked for t in r.gaps))
+    if dependencies:
+        out["dependencies_checked"] = len(tree)
+        out["dependency_gaps"] = [
+            {
+                "name": r.name,
+                "version": r.version,
+                "results": {t.label(True): s.value for t, s in r.statuses.items()},
+                "gaps": [t.label(True) for t in r.gaps],
+                "via": {t.label(True): list(path) for t, path in r.via.items()},
+            }
+            for r in tree
+            if not r.ok
+        ]
     out["targets"] = [t.label(True) for t in targets]
     if (last := _last_with_wheel(result)) is not None:
         out["last_with_wheel"] = last
@@ -560,7 +611,7 @@ def _diff_lockfiles(args: dict[str, Any]) -> dict[str, Any]:
         try:
             # As in `wheelgap diff`: no offline mode, so a lock made for other Pythons is re-checked on the index
             # rather than compared on files it may be missing (which could cancel out and pass on a guess).
-            results, source = check_with_source(path, targets, online=False, offline=False)
+            results, source, _ = check_with_source(path, targets, online=False, offline=False)
         except OSError as e:  # a lockfile that can't be read
             raise ToolError(f"{path}: {e.strerror or e}") from e
         except SourceError:

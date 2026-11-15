@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from conftest import FAKE_INDEX
+from test_deps import index  # noqa: F401  (the fake PyPI --deps resolves against)
 
 from wheelgap import __version__, mcp
 
@@ -233,6 +234,49 @@ def test_check_package_explain_caps_rejected_wheels(fake_pypi, monkeypatch):
     )
     data = reply["result"]["structuredContent"]
     assert (data["rejected"], data["rejected_omitted"]) == ({"3.13 linux-x86_64": []}, {})  # an sdist only
+
+
+@pytest.mark.usefixtures("index")
+def test_check_package_dependencies_checks_the_tree():
+    # As --deps does: app needs lib[crypto], whose crypt has no Windows ARM wheel; winonly is only on Windows.
+    targets = ["win-arm64", "linux-x86_64"]
+    (_, reply) = run(init(), call("check_package", name="app", version="1.0", python="3.14", targets=targets))
+    data = reply["result"]["structuredContent"]
+    assert data["ok"] is True  # app itself has a wheel everywhere
+    assert "dependency_gaps" not in data and "dependencies_checked" not in data
+    (_, reply) = run(
+        init(), call("check_package", name="app", version="1.0", python="3.14", targets=targets, dependencies=True)
+    )
+    data = reply["result"]["structuredContent"]
+    assert (data["name"], data["gaps"]) == ("app", [])  # the top-level fields stay app's own
+    assert data["ok"] is False  # but ok covers the tree
+    assert data["dependencies_checked"] == 3  # lib, crypt and winonly
+    assert data["dependency_gaps"] == [
+        {
+            "name": "crypt",
+            "version": "1.0",
+            "results": {"3.14 win-arm64": "source", "3.14 linux-x86_64": "wheel"},
+            "gaps": ["3.14 win-arm64"],
+            "via": {"3.14 win-arm64": ["app", "lib", "crypt"]},
+        }
+    ]
+
+
+@pytest.mark.usefixtures("index")
+def test_check_package_dependencies_ok_when_the_tree_is_clean():
+    arguments = {"name": "plain", "version": "1.0", "python": "3.14", "targets": ["win-arm64"], "dependencies": True}
+    (_, reply) = run(init(), call("check_package", **arguments))
+    data = reply["result"]["structuredContent"]
+    assert (data["ok"], data["dependencies_checked"], data["dependency_gaps"]) == (True, 2, [])  # lib and winonly
+
+
+@pytest.mark.usefixtures("index")
+def test_check_package_dependencies_must_be_a_boolean():
+    (_, reply) = run(init(), call("check_package", name="x", python="3.14", targets=["win-arm64"], dependencies=None))
+    assert "error" not in reply and reply["result"].get("isError") is not True  # null is the default, false
+    (_, reply) = run(init(), call("check_package", name="x", python="3.14", targets=["win-arm64"], dependencies="yes"))
+    assert reply["result"]["isError"] is True
+    assert reply["result"]["content"][0]["text"].endswith("'dependencies' must be true or false")
 
 
 def test_structured_content_only_from_2025_06_18(fake_pypi):
@@ -1974,3 +2018,27 @@ def test_a_malformed_roots_capability_still_counts(declared, asks, tmp_path, mon
     message["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] = {"roots": declared}
     (reply,) = run(message)
     assert (reply["result"]["resultType"] == "input_required") == asks
+
+
+@pytest.mark.usefixtures("index")
+def test_check_package_dependencies_counts_every_release_of_the_package_asked_about(monkeypatch):
+    # split resolves to 1.0 on 3.14 (a Windows ARM wheel) and to 2.0 on 3.15 (Linux only: a source build there).
+    import test_deps
+
+    monkeypatch.setitem(
+        test_deps.INDEX,
+        "split",
+        {
+            "1.0": test_deps.release(files=(test_deps.WIN_ARM,)),
+            "2.0": test_deps.release(files=(test_deps.LINUX,), requires_python=">=3.15"),
+        },
+    )
+    (_, reply) = run(
+        init(), call("check_package", name="split", python="3.14,3.15", targets=["win-arm64"], dependencies=True)
+    )
+    data = reply["result"]["structuredContent"]
+    assert data["ok"] is False
+    assert data["gaps"] == ["3.15 win-arm64"]
+    assert data["results"] == {"3.14 win-arm64": "wheel", "3.15 win-arm64": "source"}
+    assert data["versions"] == ["1.0", "2.0"]
+    assert data["dependencies_checked"] == 0
