@@ -38,20 +38,33 @@ this wheelgap version knows.
 ### `check_package()`
 
 ```python
-check_package(name, version=None, targets=None, *, files=None, pyodide_locks=())
+check_package(name, version=None, targets=None, *, files=None, pyodide_locks=(), deps=False)
 ```
 
 Check one package: the latest release, or `version`. Pass `files` (distribution filenames you already have) to work
-offline, with no index lookup.
+offline, with no index lookup. With `deps=True` it returns a list, as `check_packages(deps=True)` does; `files` can't
+be combined with it.
 
 ### `check_packages()`
 
 ```python
-check_packages(packages, targets=None, *, workers=16, pyodide_locks=())
+check_packages(packages, targets=None, *, workers=16, pyodide_locks=(), deps=False)
 ```
 
 Check many packages, looking their files up on the index in parallel. Each package is a name (`"numpy"`, the latest
 release) or a `(name, version)` pair.
+
+`deps=True` also checks everything the packages install, as `--deps` does: resolved for each target from PyPI's
+metadata, with markers and extras followed as pip evaluates them there. You get a `Result` for every package in the
+tree, `n/a` on the targets that don't install it, and `via` gives the path to each gap
+(`("mcp", "PyJWT", "cryptography")`). A tree that only a backtracking resolver could settle raises
+`wheelgap.deps.DepsError`, a `SourceError`, with the message the command line prints.
+
+```python
+for r in wheelgap.check_packages([("mcp", "2.3.0")], wheelgap.make_targets("3.14", "win-arm64"), deps=True):
+    for target in r.gaps:
+        print(r.name, target.label(True), " → ".join(r.via.get(target, ())))
+```
 
 ### `check_lockfile()`
 
@@ -89,7 +102,7 @@ the old `"bundled"` scalar when all applicable versions agree. A lock that no py
 
 ## Results
 
-Each check returns a `Result` (a list of them for `check_packages()` and `check_lockfile()`):
+Each check returns a `Result` (a list of them for `check_packages()`, `check_lockfile()` and `check_package(deps=True)`):
 
 | attribute | meaning |
 | --- | --- |
@@ -123,8 +136,8 @@ why), a result explains the gap the way `--explain` does:
   iOS and Android).
 - `result.via` maps the same targets to the dependency path from a root down to the package, as `--explain`'s `via:`
   line shows it: `("app", "pandas", "numpy")`, or `("(dev group)", "pytest")` when a dependency group pulls it in.
-  `check_lockfile()` fills it for `uv.lock`, and for `poetry.lock` files older than lock-version 2.1; it's empty for
-  other inputs and for `check_package()`.
+  `check_lockfile()` fills it for `uv.lock`, and for `poetry.lock` files older than lock-version 2.1, and
+  `check_packages()` and `check_package()` fill it with `deps=True`; it's empty for other inputs.
 
 `rejected` and `reasons` are worked out when first read; `via` is filled in when the result is made. `to_dict()` leaves
 all three out, and `to_dict(explain=True)` adds `"rejected"` and `"via"` in the same shapes as

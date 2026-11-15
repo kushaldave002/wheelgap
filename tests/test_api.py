@@ -4,6 +4,7 @@ from dataclasses import asdict, fields, replace
 from inspect import signature
 
 import pytest
+from test_deps import LIN, WIN, index  # noqa: F401  # index: test_deps' fake JSON API, a fixture
 
 import wheelgap
 from wheelgap import Status
@@ -605,3 +606,31 @@ def test_check_lockfile_requirements_format_control_explain(fake_pypi, tmp_path)
 
     assert results["nowheels"].statuses[lin] is Status.MISSING
     assert "--only-binary forbids building from source" in results["nowheels"].reasons[lin]
+
+
+@pytest.mark.usefixtures("index")
+def test_check_packages_deps_checks_what_the_packages_install():
+    results = wheelgap.check_packages([("app", "1.0")], [WIN, LIN], deps=True)
+    rows = {r.name: r for r in results}
+    assert sorted(rows) == ["app", "crypt", "lib", "winonly"]
+    assert rows["crypt"].statuses == {WIN: Status.SOURCE, LIN: Status.WHEEL}
+    assert rows["crypt"].via == {WIN: ("app", "lib", "crypt")}  # as --explain: the path to each gap
+    assert rows["crypt"].to_dict(explain=True)["via"] == {WIN.label(True): ["app", "lib", "crypt"]}
+    assert rows["winonly"].statuses == {WIN: Status.WHEEL, LIN: Status.NOT_NEEDED}  # only Windows installs it
+    assert all(r.via == {} for r in wheelgap.check_packages([("app", "1.0")], [WIN, LIN]))
+    assert [r.name for r in wheelgap.check_packages(["app"], [WIN])] == ["app"]
+
+
+@pytest.mark.usefixtures("index")
+def test_check_package_deps_returns_the_whole_tree():
+    results = wheelgap.check_package("app", "1.0", [WIN], deps=True)
+    assert sorted(r.name for r in results) == ["app", "crypt", "lib", "winonly"]
+    assert isinstance(wheelgap.check_package("app", "1.0", [WIN]), wheelgap.Result)
+    with pytest.raises(ValueError, match="deps=True looks the dependencies up on PyPI"):
+        wheelgap.check_package("app", "1.0", [WIN], files=["app-1.0-py3-none-any.whl"], deps=True)
+
+
+@pytest.mark.usefixtures("index")
+def test_check_packages_deps_raises_the_source_error_the_cli_reports():
+    with pytest.raises(SourceError, match="can't resolve c for Python 3.14 on win-arm64"):
+        wheelgap.check_packages(["x", "y"], [WIN], deps=True)

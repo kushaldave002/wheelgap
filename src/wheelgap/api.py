@@ -19,9 +19,10 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 from types import MappingProxyType
-from typing import ClassVar
+from typing import ClassVar, Literal, overload
 
 from .check import Row, Status, check, explain, explain_lines, status_for, wheel_tags
+from .deps import resolve_deps
 from .offline import require_offline
 from .pyodide import PyodideLock, bundled_version_differs, bundles, check_locks
 from .pypi import fill_all, recheck_lock
@@ -225,10 +226,14 @@ def check_packages(
     *,
     workers: int = 16,
     pyodide_locks: Iterable[PyodideLock] = (),
+    deps: bool = False,
 ) -> list[Result]:
     """Check several packages, looking their files up on the index in parallel.
 
     Each package is a name ("numpy", the latest release) or a (name, version) pair.
+    deps=True also checks everything they install, resolved for each target from PyPI's metadata as --deps does:
+    one Result per package in the tree, with `via` giving each gap target's path from a package passed in. A tree
+    that can't be resolved raises the DepsError (a SourceError) the command line reports.
     pyodide_locks (from wheelgap.pyodide.load_pyodide_lock, one per Python) mark a package that a lock's Pyodide
     ships itself as BUNDLED on pyodide targets for that lock's Python, where it would otherwise be SOURCE or MISSING.
     As with --pyodide-lock, a lock whose Python no pyodide target uses raises PyodideLockError (a ValueError) before
@@ -244,7 +249,13 @@ def check_packages(
     pkgs = [Package(p, None) if isinstance(p, str) else Package(p[0], p[1]) for p in packages]
     for p in pkgs:
         p.origin = "api"
-    fill_all(pkgs, workers=workers, pythons=tuple(dict.fromkeys(f"{t.major}.{t.minor}" for t in targets)))
+    pythons = tuple(dict.fromkeys(f"{t.major}.{t.minor}" for t in targets))
+    if deps:
+        source = Source("api", pkgs, specs=[p.name if p.version is None else f"{p.name}=={p.version}" for p in pkgs])
+        resolve_deps(source, targets)
+        fill_all(source.packages, workers=workers, pythons=pythons)
+        return [_result(r.package, dict(r.results), pyodide_locks, r.via) for r in check([source], targets) if r.needed]
+    fill_all(pkgs, workers=workers, pythons=pythons)
     return [
         _result(
             p,
@@ -259,6 +270,7 @@ def check_packages(
     ]
 
 
+@overload
 def check_package(
     name: str,
     version: str | None = None,
@@ -266,12 +278,41 @@ def check_package(
     *,
     files: Iterable[str] | None = None,
     pyodide_locks: Iterable[PyodideLock] = (),
-) -> Result:
+    deps: Literal[False] = False,
+) -> Result: ...
+
+
+@overload
+def check_package(
+    name: str,
+    version: str | None = None,
+    targets: Sequence[Target] | None = None,
+    *,
+    files: Iterable[str] | None = None,
+    pyodide_locks: Iterable[PyodideLock] = (),
+    deps: Literal[True],
+) -> list[Result]: ...
+
+
+def check_package(
+    name: str,
+    version: str | None = None,
+    targets: Sequence[Target] | None = None,
+    *,
+    files: Iterable[str] | None = None,
+    pyodide_locks: Iterable[PyodideLock] = (),
+    deps: bool = False,
+) -> Result | list[Result]:
     """Check one package. Pass `files` (distribution filenames) to skip the index lookup.
 
-    pyodide_locks work as in check_packages().
+    pyodide_locks work as in check_packages(). deps=True returns a list: a Result for every package in its tree,
+    as check_packages(deps=True) does.
     """
     pyodide_locks = tuple(pyodide_locks)
+    if deps:
+        if files is not None:
+            raise ValueError("deps=True looks the dependencies up on PyPI, so it can't be combined with files")
+        return check_packages([(name, version)], targets, pyodide_locks=pyodide_locks, deps=True)
     if files is None:
         return check_packages([(name, version)], targets, pyodide_locks=pyodide_locks)[0]
     targets = _package_targets(targets)
