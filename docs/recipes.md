@@ -205,7 +205,7 @@ jobs:
   badge:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
       - run: mkdir -p badge && uvx wheelgap uv.lock --badge badge/wheels.json || true  # the badge shows gaps
       - uses: peaceiris/actions-gh-pages@v4
