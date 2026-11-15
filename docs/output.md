@@ -261,6 +261,9 @@ fastlib 2.0.0: no newer release has a wheel for linux-riscv64
 - **Which release.** Only a release that keeps a wheel on every target where the checked version has one counts, so a
   suggestion never trades one gap for another. Gap targets that no such release has a wheel for get a "no newer
   release" line, ending `without losing one elsewhere` when some newer release has a wheel for it but drops another.
+  When no newer release has a wheel for it at all, the line names the newest older release that did, if one of the 50
+  releases before the checked version has one (counted the same way): `cryptography 50.0.2: no newer release has a
+  wheel for win-arm64; the last one that did is 46.0.3`, so pinning below the next one avoids the build.
   The other gap targets get the lowest counted release with a wheel for every one of them, when there is one;
   otherwise each its own nearest, one line per release. A wheel counts when it isn't yanked, the target accepts its
   tags, and its `Requires-Python` admits the target's Python. Pre-releases count only when the checked version is one,
@@ -278,9 +281,10 @@ fastlib 2.0.0: no newer release has a wheel for linux-riscv64
 
 With `--json --explain --suggest`, each package with a gap that was looked up gets a `suggest` object keyed by target
 label like `rejected`: `"suggest": {"musl-aarch64": "2.1.0", "win-amd64": "2.1.0"}`. A target with no counted release is
-left out (so the object can be empty). The key is left out for a package with no gap, a row with no version, a package a
-requirements file's `--no-binary` covers, a package that wasn't looked up (its index isn't known to be PyPI, or the run
-uses `--index-url` or `WHEELGAP_INDEX_URL`), and a failed or dropped lookup (a note on stderr says so). Like the other
+left out (so the object can be empty). Next to it, `last_with_wheel` names, for each gap target no newer release has a
+wheel for, the newest older release that has one: `"last_with_wheel": {"win-arm64": "46.0.3"}`. Both keys are left out
+for a package with no gap, a row with no version, a package a requirements file's `--no-binary` covers, a package
+that wasn't looked up (its index isn't known to be PyPI, or the run uses `--index-url` or `WHEELGAP_INDEX_URL`), and a failed or dropped lookup (a note on stderr says so). Like the other
 hints, it never changes a status, the summary or the exit code. Quiet text output can't show it (quiet can't be combined
 with `--explain`). After 0.10.0, with `--markdown --explain --suggest`, suggestions render as a list under the collapsed explanation details.
 

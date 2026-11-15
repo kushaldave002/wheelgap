@@ -895,6 +895,10 @@ def report_json(
                 out["suggest"] = {
                     t.label(multi_py): found.found[t] for t in gap_targets(r, targets) if t in found.found
                 }
+                # By gap target no newer release has a wheel for, the newest older release that has one.
+                out["last_with_wheel"] = {
+                    t.label(multi_py): found.last[t] for t in gap_targets(r, targets) if t in found.last
+                }
         return out
 
     report: dict[str, object] = {

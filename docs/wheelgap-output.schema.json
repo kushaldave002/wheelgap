@@ -221,6 +221,11 @@
                     "type": "object",
                     "additionalProperties": {"type": "string"}
                 },
+                "last_with_wheel": {
+                    "description": "Present with suggest: for each target in rejected that no newer release has a wheel for (counted as for suggest), the newest older release that has one, read from the 50 newest releases older than the checked version (no pre-release unless the checked version is one). A target with no such release is left out, so the object can be empty. It doesn't change results, summary or the exit code.",
+                    "type": "object",
+                    "additionalProperties": {"type": "string"}
+                },
                 "bundled": {
                     "description": "Present with --pyodide-lock when this package is bundled on a Pyodide target: the version Pyodide ships.",
                     "type": "string"

@@ -2228,6 +2228,7 @@ def _assert_matches_output_schema(data):
             "bundled_version_differs",
             "conda_forge",
             "suggest",
+            "last_with_wheel",
         }
         assert isinstance(pkg["name"], str) and pkg["name"]
         assert pkg["version"] is None or isinstance(pkg["version"], str)
@@ -2261,6 +2262,9 @@ def _assert_matches_output_schema(data):
             assert set(pkg["suggest"]) <= set(pkg["rejected"]) and all(
                 isinstance(v, str) for v in pkg["suggest"].values()
             )
+        if "last_with_wheel" in pkg:  # an older release for gap targets no newer one has a wheel for
+            assert "suggest" in pkg and not set(pkg["last_with_wheel"]) & set(pkg["suggest"])
+            assert set(pkg["last_with_wheel"]) <= set(pkg["rejected"])
     for item in data["skipped"]:
         assert set(item) == {"name", "reason"}
         assert isinstance(item["name"], str) and isinstance(item["reason"], str)

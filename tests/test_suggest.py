@@ -381,3 +381,63 @@ def test_suggest_targets_still_parses(capsys, tmp_path):
     with pytest.raises(SystemExit):
         main(["--suggest", str(tmp_path)])  # now the flag of its own, which needs --explain
     assert "--suggest only adds to --explain" in capsys.readouterr().err
+
+
+def test_no_newer_wheel_names_the_last_older_release_with_one():
+    (target,) = build_targets(["3.13"], ["win-arm64"])
+    arm = "cp313-cp313-win_arm64"
+    releases = {
+        "1.0": [wheel("1.0", arm)],
+        "1.1": [wheel("1.1", arm)],
+        "1.2": [wheel("1.2", arm, yanked=True)],  # yanked: doesn't count
+        "1.3": [wheel("1.3", arm, requires_python=">=3.14")],  # not for this Python
+        "2.0rc1": [wheel("2.0rc1", arm)],  # a pre-release, and 2.0 isn't one
+        "2.0": [{"filename": "demo-2.0.tar.gz"}],
+        "2.1": [{"filename": "demo-2.1.tar.gz"}],
+    }
+    assert suggest.suggest(releases, "2.0", [target]) == suggest.Suggestion({}, (), {target: "1.1"})
+    # A pre-release pin counts older pre-releases.
+    assert suggest.suggest(releases, "2.0rc2", [target]).last == {target: "2.0rc1"}
+    # No release ever had one.
+    linux = {"1.0": [wheel("1.0", "cp313-cp313-manylinux_2_17_x86_64")], "2.0": []}
+    assert suggest.suggest(linux, "2.0", [target]) == suggest.Suggestion({})
+
+
+def test_last_older_release_only_when_no_newer_one_has_a_wheel():
+    linux, win = build_targets(["3.13"], ["linux-x86_64", "win-amd64"])
+    linux_wheel, win_wheel = wheel("1.0", "cp313-cp313-manylinux_2_17_x86_64"), wheel("1.0", "cp313-cp313-win_amd64")
+    releases = {"0.9": [win_wheel], "1.0": [linux_wheel], "1.1": [win_wheel]}
+    # 1.1 has a Windows wheel but drops Linux's: "without losing one elsewhere", not an older release.
+    assert suggest.suggest(releases, "1.0", [win], keep=[linux]) == suggest.Suggestion({}, (win,))
+    assert suggest.suggest(releases, "1.0", [win]) == suggest.Suggestion({win: "1.1"})
+
+
+def test_last_older_release_looks_back_a_bounded_number_of_releases():
+    (target,) = build_targets(["3.13"], ["linux-x86_64"])
+    releases = {"0.1": [wheel("0.1")]} | {f"1.{i}": [] for i in range(suggest.LOOKBACK)} | {"2.0": []}
+    assert suggest.suggest(releases, "2.0", [target]).last == {}
+    del releases["1.0"]
+    assert suggest.suggest(releases, "2.0", [target]).last == {target: "0.1"}
+
+
+def test_text_and_json_name_the_last_release_with_a_wheel(capsys, fake_pypi, monkeypatch):
+    monkeypatch.setitem(
+        FAKE_INDEX,
+        "wheelstopped",
+        {
+            "1.0": ["wheelstopped-1.0-cp313-cp313-win_arm64.whl", "wheelstopped-1.0.tar.gz"],
+            "1.1": ["wheelstopped-1.1-cp313-cp313-win_arm64.whl", "wheelstopped-1.1.tar.gz"],
+            "1.2": ["wheelstopped-1.2.tar.gz"],
+            "2.0": ["wheelstopped-2.0.tar.gz"],
+        },
+    )
+    args = ["wheelstopped==2.0", "laggard==1.0", "-t", "win-arm64,linux-riscv64"]
+    _, out, _ = run(capsys, *args, *FLAGS)
+    assert "wheelstopped 2.0: no newer release has a wheel for win-arm64; the last one that did is 1.1\n" in out
+    assert "wheelstopped 2.0: no newer release has a wheel for linux-riscv64\n" in out
+    assert "laggard 1.0: no newer release has a wheel for win-arm64, linux-riscv64\n" in out
+    code, data, _ = run(capsys, *args, "-p", "3.13", "--explain", "--suggest", "--json")
+    pkgs = {p["name"]: p for p in json.loads(data)["packages"]}
+    _assert_matches_output_schema(json.loads(data))
+    assert pkgs["wheelstopped"]["suggest"] == {} and pkgs["wheelstopped"]["last_with_wheel"] == {"win-arm64": "1.1"}
+    assert pkgs["laggard"]["last_with_wheel"] == {}
