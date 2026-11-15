@@ -241,6 +241,8 @@ The tree is resolved for each target from PyPI's metadata, and the result adds
 those of the package asked about, except `ok`, which is then true only if
 nothing in the tree has a gap. A tree that only a backtracking resolver could
 settle is an error, as it is on the command line.
+When several Pythons pick different releases of the package itself, its
+`results` and `gaps` cover all of them and `versions` lists them.
 
 ## Protocol versions
 
