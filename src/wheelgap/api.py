@@ -184,7 +184,8 @@ def _result(
         pkg.version,
         statuses,
         tuple(dict.fromkeys(f for variant in pkg.variants for f in variant.files or ())),
-        pkg.error,
+        # With several Pythons, a lookup that went wrong records its error on each resolution, not on pkg.
+        pkg.error or next((variant.error for variant in pkg.variants if variant.error), None),
         # Locks for different Pythons can ship different versions: report the first, and a difference in any.
         applied[0].packages[pkg.key] if applied else None,
         any(bundled_version_differs(pkg, lock) for lock in applied),

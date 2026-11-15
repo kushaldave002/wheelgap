@@ -125,6 +125,17 @@ def test_package_pin_respects_requires_python_per_target(fake_pypi, check_one):
     assert fake_pypi == ["https://pypi.org/pypi/pythonranged/2.0/json"]
 
 
+def test_package_pin_lookup_error_for_several_pythons_is_reported(monkeypatch):
+    # Each Python's resolution records a malformed response's error, so the Result must carry it too.
+    from wheelgap import pypi
+
+    monkeypatch.setattr(pypi, "fetch_json", lambda url, timeout=20.0: {"urls": "nope"})
+    old, new = wheelgap.make_targets(python="3.9,3.13", platforms="linux-x86_64")
+    (result,) = wheelgap.check_packages([("x", "1.0")], targets=[old, new])
+    assert result.error == "unexpected response from the index"
+    assert result.statuses == {old: Status.UNKNOWN, new: Status.UNKNOWN}
+
+
 def test_check_packages_counts_what_pyodide_bundles(fake_pypi, fixtures):
     lock = load_pyodide_lock(str(fixtures / "pyodide-lock.json"))  # Python 3.13
     linux, pyodide = wheelgap.make_targets(python="3.13", platforms=["linux-x86_64", "pyodide"])
