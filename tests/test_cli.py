@@ -3423,6 +3423,21 @@ def test_only_editable_requirements_says_no_packages_to_check(capsys, fake_pypi,
     assert "All 0" not in out
 
 
+@pytest.mark.parametrize("markdown", [False, True])
+def test_ignore_every_package_says_no_packages_to_check(capsys, fake_pypi, tmp_path, markdown):
+    req = tmp_path / "requirements.txt"
+    req.write_text("purewheel==3.1\nfastlib==2.0.0\n", encoding="utf-8")
+    args = ["-p", "3.13", "-t", "linux-x86_64", "--ignore", "purewheel,fastlib"]
+    code, out, err = run(capsys, str(req), *args, *(["--markdown"] if markdown else []))
+    assert code == 0
+    empty = "### wheelgap: no packages to check" if markdown else "No packages to check."
+    lines = [line for line in out.splitlines() if line.strip()]
+    ignored = next(i for i, line in enumerate(lines) if line.lower().startswith("ignored:"))
+    assert "fastlib" in lines[ignored]
+    assert lines.index(empty) < ignored if markdown else lines.index(empty) > ignored
+    assert "have a wheel" not in out and "has a wheel" not in out
+
+
 def test_range_split_clean_counts_as_one_package(capsys, fake_pypi):
     base = ("pythonranged>=1", "-p", "3.9,3.13", "-t", "linux-x86_64")
 
