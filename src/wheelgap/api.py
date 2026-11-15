@@ -251,6 +251,8 @@ def check_packages(
         p.origin = "api"
     pythons = tuple(dict.fromkeys(f"{t.major}.{t.minor}" for t in targets))
     if deps:
+        if urls := [p.name for p in pkgs if "@" in p.name or "://" in p.name]:
+            raise ValueError(f"deps=True looks names up on PyPI, so it can't check a URL: {', '.join(urls)}")
         source = Source("api", pkgs, specs=[p.name if p.version is None else f"{p.name}=={p.version}" for p in pkgs])
         resolve_deps(source, targets)
         fill_all(source.packages, workers=workers, pythons=pythons)
@@ -292,6 +294,18 @@ def check_package(
     pyodide_locks: Iterable[PyodideLock] = (),
     deps: Literal[True],
 ) -> list[Result]: ...
+
+
+@overload
+def check_package(
+    name: str,
+    version: str | None = None,
+    targets: Sequence[Target] | None = None,
+    *,
+    files: Iterable[str] | None = None,
+    pyodide_locks: Iterable[PyodideLock] = (),
+    deps: bool = False,
+) -> Result | list[Result]: ...
 
 
 def check_package(

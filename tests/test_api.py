@@ -634,3 +634,9 @@ def test_check_package_deps_returns_the_whole_tree():
 def test_check_packages_deps_raises_the_source_error_the_cli_reports():
     with pytest.raises(SourceError, match="can't resolve c for Python 3.14 on win-arm64"):
         wheelgap.check_packages(["x", "y"], [WIN], deps=True)
+
+
+@pytest.mark.usefixtures("index")
+def test_check_packages_deps_refuses_a_url():
+    with pytest.raises(ValueError, match="can't check a URL: foo @ https://example.org/foo-1.0.tar.gz"):
+        wheelgap.check_packages(["foo @ https://example.org/foo-1.0.tar.gz"], deps=True)
