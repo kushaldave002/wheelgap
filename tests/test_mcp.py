@@ -592,6 +592,15 @@ def test_check_dockerfile_build_args_must_be_strings(tmp_path, fixtures):
     assert "'build_args' must be an object of strings" in reply["result"]["content"][0]["text"]
 
 
+@pytest.mark.parametrize("key", ["PY=3", "", "1PY", "P Y"])
+def test_check_dockerfile_build_args_keys_must_be_arg_names(tmp_path, fixtures, key):
+    # A key with "=" would be split differently when it's passed on as --build-arg NAME=VALUE.
+    dockerfile = dockerfile_project(tmp_path, fixtures, "ARG PY=3.12\nFROM python:${PY}-slim\n")
+    (_, reply) = run(init(), call("check_dockerfile", dockerfile=str(dockerfile), build_args={key: ".13"}))
+    assert reply["result"]["isError"]
+    assert "'build_args' has a key that isn't an ARG name" in reply["result"]["content"][0]["text"]
+
+
 def test_check_dockerfile_ignores_unused_arg_defaults(fake_pypi, tmp_path, fixtures):
     dockerfile = dockerfile_project(tmp_path, fixtures, "ARG UNUSED=3.12\nFROM python:3.13-slim\n")
     (_, reply) = run(init(), call("check_dockerfile", dockerfile=str(dockerfile)))

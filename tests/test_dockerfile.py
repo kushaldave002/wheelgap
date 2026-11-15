@@ -1001,3 +1001,11 @@ def test_dockerfile_that_is_not_utf8_is_a_clear_error(tmp_path):
     path.write_bytes(b"FROM --platform=linux/arm64\xa0python:3.13\n")  # cp1252: Docker would read 0xa0 as a space
     with pytest.raises(DockerfileError, match="not UTF-8 \\(byte 0xa0 at offset 27\\), pass -p/-t instead"):
         read_dockerfile(path)
+
+
+def test_a_build_arg_doesnt_make_a_non_ascii_arg_readable(tmp_path):
+    # Docker splits ARG on any Unicode space: this line declares A and B, so a value for A can't settle B.
+    path = tmp_path / "Dockerfile"
+    path.write_text("ARG B=3.12\nARG A=1\u00a0B=3.13\nFROM python:${B}-slim\n", encoding="utf-8")
+    with pytest.raises(DockerfileError, match="non-ASCII characters in an ARG aren't supported"):
+        read_dockerfile(path, {"A": "3"})

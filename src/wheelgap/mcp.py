@@ -550,6 +550,9 @@ def _check_dockerfile(args: dict[str, Any]) -> dict[str, Any]:
     build_args = args.get("build_args") or {}
     if not isinstance(build_args, dict) or not all(isinstance(v, str) for v in build_args.values()):
         raise ToolError("'build_args' must be an object of strings")
+    # As on the command line: an ARG name, so NAME=VALUE can't be split differently than it was read.
+    if bad := [k for k in build_args if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k, re.ASCII)]:
+        raise ToolError(f"'build_args' has a key that isn't an ARG name: {bad[0]!r}")
     try:
         image = read_dockerfile(dockerfile, build_args)
     except DockerfileError as e:  # wheelgap's message; its CLI advice, where it gives some, translated

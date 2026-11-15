@@ -547,16 +547,18 @@ def _global_arg_defaults(
             continue
         name, value = m.group(1), m.group(2)
         args.declared.add(name)
+        # Docker splits an ARG on any Unicode space, so a non-ASCII declaration may declare more than one name
+        # (`ARG A=1<U+00A0>B=2`): it stays unreadable whatever --build-arg gives A.
+        if not instruction.isascii():
+            args.unreadable.append(f"{instruction}: non-ASCII characters in an ARG aren't supported")
+            continue
         given = name in build_args
         what = f"--build-arg {name}" if given else f"ARG {name}"
         if given:
             value = build_args[name]
-        if value is not None and not value.isascii():
-            if given:
+            if not value.isascii():
                 args.problems[name] = f"{what}={value}: non-ASCII characters in a value aren't supported"
                 continue
-            args.unreadable.append(f"{instruction}: non-ASCII characters in an ARG aren't supported")
-            continue
         # A later declaration of the same name replaces the earlier one, as in Docker.
         args.defaults.pop(name, None)
         args.problems.pop(name, None)
