@@ -21,6 +21,7 @@ from __future__ import annotations
 import email.parser
 import urllib.error
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from urllib.parse import quote
 
@@ -64,6 +65,9 @@ class Resolver:
         self._projects: dict[str, dict | Exception] = {}
         self._requires: dict[tuple[str, str, str], list[Requirement] | Exception] = {}
         self.names: dict[str, str] = {}  # key -> the name the index gives it
+        # A requirements file's --no-binary/--only-binary policy (key -> (no_binary, only_binary)), set by
+        # resolve_deps for the source being resolved: pip picks releases under it, so pick() does too.
+        self.policy: Callable[[str], tuple[bool, bool]] | None = None
         self._metadata: dict[str, list[str] | Exception] = {}  # a wheel's .metadata URL -> its Requires-Dist
 
     def _project(self, key: str) -> dict:
@@ -177,7 +181,12 @@ class Resolver:
             ]
             if live:
                 usable[version] = text
-            if any(e["filename"].endswith(SDIST_SUFFIXES) or rejection(e["filename"], target) is None for e in live):
+            no_binary, only_binary = self.policy(key) if self.policy else (False, False)
+            if any(
+                (e["filename"].endswith(SDIST_SUFFIXES) and not only_binary)
+                or (e["filename"].endswith(".whl") and not no_binary and rejection(e["filename"], target) is None)
+                for e in live
+            ):
                 installable[version] = text
         combined = SpecifierSet(",".join(s for s in specs if s))
         chosen = max(combined.filter(installable), default=None) or max(combined.filter(usable), default=None)
@@ -241,8 +250,14 @@ class Resolver:
             queue.extend((r, extras[key], tree.paths[key]) for r in requires)
         return tree
 
-    def resolve(self, roots: list[Requirement], target: Target) -> _Tree:
-        learned: dict[str, set[str]] = {}
+    def resolve(
+        self, roots: list[Requirement], target: Target, constraints: dict[str, set[str]] | None = None
+    ) -> _Tree:
+        # A requirements file's -c constraints count as learned specifiers from the start; unlike a constraint the
+        # rounds below learn, a seeded one is never dropped for going unused — it applies while its package is in
+        # the tree, and a package that never installs leaves it harmlessly unimposed.
+        seeded: dict[str, set[str]] = {k: set(specs) for k, specs in (constraints or {}).items()}
+        learned: dict[str, set[str]] = {k: set(specs) for k, specs in seeded.items()}
         seen: set[frozenset[tuple[str, str]]] = set()
         for _ in range(MAX_ROUNDS):
             state = frozenset((k, s) for k, specs in learned.items() for s in specs)
@@ -254,7 +269,12 @@ class Resolver:
                 learned.setdefault(out.key, set()).add(out.spec)
                 continue
             # A learned constraint the finished tree doesn't impose would hold a package back: drop it, go again.
-            unused = {(k, s) for k, specs in learned.items() for s in specs if s not in out.imposed.get(k, set())}
+            unused = {
+                (k, s)
+                for k, specs in learned.items()
+                for s in specs
+                if s not in out.imposed.get(k, set()) and s not in seeded.get(k, set())
+            }
             # A release picked before all its constraints were known may not be the one they pick together (a later
             # `>=2.0b1` lets prereleases in): go again with them all known from the start.
             stale = [
@@ -297,9 +317,18 @@ def _lookup_error(e: Exception) -> str:
     return f"lookup failed ({type(e).__name__})"
 
 
+def pinned_complete(source: Source) -> bool:
+    """A requirements file that's already complete: every requirement pinned, with --hash lines (in hash mode pip
+    refuses any dependency the file doesn't pin), so --deps has nothing to resolve."""
+    return source.compiled and all(
+        p.version is not None and not p.spec and not p.error for p in source.packages if not p.skip
+    )
+
+
 def resolve_deps(source: Source, targets: list[Target], resolver: Resolver | None = None) -> None:
     """Replace the source's packages with what its requirements install on each target."""
     resolver = resolver or Resolver()
+    resolver.policy = source.format_control.policy if source.requirements and source.format_control else None
     roots = [Requirement(text) for text in source.specs]
     kept = [p for p in source.packages if p.skip]  # a name @ URL: nothing to look up, as without --deps
     roots = [r for r in roots if not r.url]
@@ -307,7 +336,7 @@ def resolve_deps(source: Source, targets: list[Target], resolver: Resolver | Non
     index: dict[tuple[str, str | None, str | None], int] = {}
     deps_paths: dict[Target, dict[int, list[str]]] = {}
     for target in targets:
-        tree = resolver.resolve(roots, target)
+        tree = resolver.resolve(roots, target, constraints=source.constraint_specs)
         reach: dict[int, list[str]] = {}
         for key, path in tree.paths.items():
             version, error = tree.chosen.get(key), tree.errors.get(key)
@@ -323,5 +352,10 @@ def resolve_deps(source: Source, targets: list[Target], resolver: Resolver | Non
                 packages[i].error = error  # its dependencies couldn't be read: unknown, not a clean bill
             reach[i] = path
         deps_paths[target] = reach
+    if source.requirements:
+        if fc := source.format_control:  # --no-binary/--only-binary lines apply to the resolved packages too
+            for p in packages:
+                if not p.skip:
+                    p.no_binary, p.only_binary = fc.policy(p.key)
     source.packages = packages
     source.deps_paths = deps_paths

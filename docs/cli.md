@@ -136,12 +136,20 @@ directory's `pixi.lock` the lockfile read. Naming one for any other input is an 
 
 ### `--deps` {#deps}
 
-For package names on the command line or (after 0.11.0) requirements declared in `pyproject.toml`, also check what they install.
+For package names on the command line or (after 0.11.0) requirements files and dependencies declared in
+`pyproject.toml`, also check what they install.
 For a project file, this includes any extras you select with `--extra` or `--all-extras`. wheelgap resolves the
 tree for each target from PyPI's metadata: for each requirement, the newest release that meets every constraint on it,
 supports the target's Python and isn't yanked (a yanked release only for an `==` pin), following markers and extras as
 pip evaluates them on that target. `--explain` shows the path to each gap (`via: mcp → PyJWT → cryptography`), and
 `--json --explain` has it as `via`. A release picked differently for two Pythons is a row for each.
+
+With a requirements file, each requirement line is a root — pinned or not, with its markers and extras — and `-r`
+includes are read too. A `-c` constraint file's constraints apply to the resolved tree, to dependencies as well as
+named packages, and one wheelgap can't apply marks the package `unknown`, as without `--deps`. `--no-binary` and
+`--only-binary` lines apply to the resolved packages as they do to the file's own. Editable, path and URL lines stay
+skipped. A file that already lists what it installs — every requirement pinned, with `pip-compile`'s `--hash` lines or
+`# via` comments — needs no resolving: wheelgap says so and checks it as written.
 
 It isn't pip's resolver. When a later constraint rules out a release it already picked, it starts again with that
 constraint known; if the constraints on a package can't all be met, it stops with an error rather than guess. A release

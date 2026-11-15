@@ -372,8 +372,8 @@ def _check_lockfile(
     offline: bool,
     pyodide_locks: Iterable[PyodideLock] = (),
     environment: str | None = None,
-) -> tuple[list[Result], Source]:
-    """check_lockfile(), also returning the loaded source (diff.py needs its skipped packages)."""
+) -> tuple[list[Result], Source, list[Row]]:
+    """check_lockfile(), also returning the source and check rows for diff's skips and suggestions."""
     targets = _package_targets(targets)
     pyodide_locks = tuple(pyodide_locks)
     if online and offline:
@@ -395,4 +395,4 @@ def _check_lockfile(
     if not online and not offline and pythons_outside_lock(source, targets):
         recheck_lock(source.packages)
     rows: list[Row] = [r for r in check([source], targets) if r.needed]
-    return [_result(r.package, dict(r.results), pyodide_locks, r.via) for r in rows], source
+    return [_result(r.package, dict(r.results), pyodide_locks, r.via) for r in rows], source, rows

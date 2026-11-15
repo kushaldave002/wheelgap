@@ -611,7 +611,7 @@ def _diff_lockfiles(args: dict[str, Any]) -> dict[str, Any]:
         try:
             # As in `wheelgap diff`: no offline mode, so a lock made for other Pythons is re-checked on the index
             # rather than compared on files it may be missing (which could cancel out and pass on a guess).
-            results, source = check_with_source(path, targets, online=False, offline=False)
+            results, source, _ = check_with_source(path, targets, online=False, offline=False)
         except OSError as e:  # a lockfile that can't be read
             raise ToolError(f"{path}: {e.strerror or e}") from e
         except SourceError:
