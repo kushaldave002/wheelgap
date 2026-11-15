@@ -115,6 +115,7 @@ def test_package_pin_respects_requires_python_per_target(fake_pypi, check_one):
         (result,) = wheelgap.check_packages([("pythonranged", "2.0")], targets=[old, new])
     assert result.statuses == {old: Status.MISSING, new: Status.WHEEL}
     assert result.files == ("pythonranged-2.0-py3-none-any.whl",)
+    assert result.requires_python_rejected == {"pythonranged-2.0-py3-none-any.whl": "requires Python >=3.10"}
     assert result.pure
     rejected = [("pythonranged-2.0-py3-none-any.whl", "requires Python >=3.10")]
     assert result.rejected == {old: rejected}
@@ -123,6 +124,12 @@ def test_package_pin_respects_requires_python_per_target(fake_pypi, check_one):
         old.label(True): [{"file": f, "reason": why} for f, why in rejected]
     }
     assert fake_pypi == ["https://pypi.org/pypi/pythonranged/2.0/json"]
+
+
+def test_package_pin_yanked_files_for_several_pythons(fake_pypi):
+    old, new = wheelgap.make_targets(python="3.12,3.13", platforms="linux-x86_64")
+    (result,) = wheelgap.check_packages([("halfyanked", "2.0")], targets=[old, new])
+    assert result.yanked == {"halfyanked-2.0-py3-none-any.whl"}
 
 
 def test_package_pin_lookup_error_for_several_pythons_is_reported(monkeypatch):

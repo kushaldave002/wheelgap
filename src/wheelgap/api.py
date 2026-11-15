@@ -190,8 +190,9 @@ def _result(
         applied[0].packages[pkg.key] if applied else None,
         any(bundled_version_differs(pkg, lock) for lock in applied),
         {t: tuple(via[t]) for t, s in statuses.items() if s in _EXPLAINED and t in via},
-        pkg.yanked,
-        pkg.requires_python_rejected,
+        # A file's yanked flag and its Requires-Python reason are the same for every Python, so these are the union.
+        frozenset(f for variant in pkg.variants for f in variant.yanked),
+        {f: why for variant in pkg.variants for f, why in variant.requires_python_rejected.items()},
         pkg.no_binary,
         pkg.only_binary,
         pkg.resolutions,
