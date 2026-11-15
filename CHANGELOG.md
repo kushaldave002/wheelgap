@@ -3,6 +3,7 @@
 ## Unreleased
 
 - MCP: `check_package` now returns `last_with_wheel`, as `--explain --suggest --json` does: for each gap target no newer release has a wheel for, the newest older release that has one, so an agent can say which version to pin. (#373, thanks [@kushaldave002](https://github.com/kushaldave002))
+- `--dockerfile`: a global `ARG` for a name BuildKit sets itself (`TARGETARCH`, `TARGETPLATFORM`, `BUILDPLATFORM` and the rest) with no default now says the value is set by the build, not that a `--build-arg` value isn't read. One with a default is still used as BuildKit does: the default replaces the automatic value. (#371, thanks [@kushaldave002](https://github.com/kushaldave002))
 
 ## 0.11.0 (2026-11-15)
 

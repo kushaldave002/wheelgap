@@ -48,6 +48,41 @@ deployment Python version and targets from the same
 options after `--`, for example `nox -s wheels -- --explain`. A gap that fails
 wheelgap's configured policy also fails the nox session.
 
+## Renovate
+
+Save this as `.github/workflows/wheelgap.yml` in a project that commits its
+`uv.lock`:
+
+```yaml
+name: Wheel coverage
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  wheels:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: wheelgap/wheelgap@v0.11.0
+        with:
+          args: uv.lock -p 3.13 -t linux-x86_64,musl-aarch64
+          compare-to: base
+```
+
+The job runs on Renovate's and other pull requests. It compares the merged
+lockfile with the pull request's base and fails when a dependency update drops
+a wheel for one of the configured targets. Mark the `wheels` check as required
+for the target branch if you want it to block Renovate automerge.
+
+Replace the targets with the ones you deploy, or set them in
+[`[tool.wheelgap]`](configuration.md) and shorten `args` to `uv.lock`.
+Keep the pull request's default merge checkout so [`compare-to: base`](ci.md#compare-to)
+can find the base lockfile. `fetch-depth: 0` fetches the base branch with it, which a private repository needs
+with `persist-credentials: false`.
+
 ## Multi-arch images
 
 Check both architectures before building an image for AMD64 and ARM64. This
@@ -152,6 +187,32 @@ the intended Python and targets there, or add `-p` and `-t` to the command.
 The loop stops at the first failing check and exits with its code, so later
 lockfiles aren't checked and a later successful check can't hide an earlier gap
 or input error.
+
+## Will `pip install X` work on my platform?
+
+To check a package's whole dependency tree without installing it, have
+[uv](https://docs.astral.sh/uv/) resolve the tree for every platform, then check the result:
+
+```bash
+echo mcp | uv pip compile --universal --python-version 3.14 - -o requirements.txt
+wheelgap requirements.txt -p 3.14 -t win-arm64
+```
+
+- `echo mcp |` feeds the requirements to compile on standard input (`-`); name
+  any package or pin, one per line. `--python-version 3.14` is the Python uv
+  resolves for, and `-p 3.14` the one wheelgap checks; keep them the same.
+- `--universal` keeps the environment markers in the compiled file, so each
+  target gets its own resolved set: a dependency pip installs only on Windows
+  shows `–` (n/a) on the Linux targets instead of a false gap. Without it,
+  `uv pip compile` resolves for the machine it runs on.
+- On 15 November 2026 this finds `cryptography 50.0.2` (`● source`) under
+  `mcp`: `pip install mcp` on Windows on ARM compiles it. Resolved versions
+  change over time, so yours may differ.
+
+For a quick check without writing a file, `wheelgap mcp==2.3.0 --deps -p 3.14 -t win-arm64` resolves the tree itself
+from PyPI's metadata (see [`--deps`](cli.md#deps)); pin the version, since `wheelgap mcp` on its own starts the MCP
+server. It uses wheelgap's own resolver rather than the one pip runs; a
+compiled file like the one above gives the resolution a real resolver picked.
 
 ## Using wheelgap from an agent or script
 
