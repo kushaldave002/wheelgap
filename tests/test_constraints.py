@@ -81,7 +81,10 @@ def test_never_a_pin_that_loses_a_wheel_elsewhere(capsys, tmp_path, monkeypatch)
 def test_needs_suggest_and_a_writable_file(capsys, tmp_path):
     with pytest.raises(SystemExit):
         main(["laggard==1.0", "--explain", "--write-constraints", str(tmp_path / "c.txt")])
-    assert "--write-constraints writes what --suggest finds; pass --explain --suggest (or --deps --explain) too" in capsys.readouterr().err
+    assert (
+        "--write-constraints writes what --suggest finds; pass --explain --suggest (or --deps --explain) too"
+        in capsys.readouterr().err
+    )
     code, _, err = run(capsys, "laggard==1.0", "-t", "win-amd64", "--write-constraints", str(tmp_path), *FLAGS)
     assert code == 2 and "wheelgap: error:" in err
     # A run without gaps still writes the file, with no pins.
