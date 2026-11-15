@@ -1950,6 +1950,11 @@ def _main(argv: list[str]) -> int:
                 f"or `uv pip compile -c {args.write_constraints} ...`"
             )
             print(Style(use_color(args.color)).dim(note), file=sys.stderr)
+    elif args.write_constraints is not None and not quiet:
+        print(
+            f"wheelgap: note: {args.write_constraints} wasn't written: --suggest looked nothing up on this run",
+            file=sys.stderr,
+        )
 
     if args.github_annotations:
         # Workflow commands work on stdout and stderr alike; stderr keeps --json and --markdown output clean.
