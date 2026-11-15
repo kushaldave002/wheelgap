@@ -2018,3 +2018,27 @@ def test_a_malformed_roots_capability_still_counts(declared, asks, tmp_path, mon
     message["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] = {"roots": declared}
     (reply,) = run(message)
     assert (reply["result"]["resultType"] == "input_required") == asks
+
+
+@pytest.mark.usefixtures("index")
+def test_check_package_dependencies_counts_every_release_of_the_package_asked_about(monkeypatch):
+    # split resolves to 1.0 on 3.14 (a Windows ARM wheel) and to 2.0 on 3.15 (Linux only: a source build there).
+    import test_deps
+
+    monkeypatch.setitem(
+        test_deps.INDEX,
+        "split",
+        {
+            "1.0": test_deps.release(files=(test_deps.WIN_ARM,)),
+            "2.0": test_deps.release(files=(test_deps.LINUX,), requires_python=">=3.15"),
+        },
+    )
+    (_, reply) = run(
+        init(), call("check_package", name="split", python="3.14,3.15", targets=["win-arm64"], dependencies=True)
+    )
+    data = reply["result"]["structuredContent"]
+    assert data["ok"] is False
+    assert data["gaps"] == ["3.15 win-arm64"]
+    assert data["results"] == {"3.14 win-arm64": "wheel", "3.15 win-arm64": "source"}
+    assert data["versions"] == ["1.0", "2.0"]
+    assert data["dependencies_checked"] == 0

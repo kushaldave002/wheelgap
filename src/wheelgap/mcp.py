@@ -464,6 +464,7 @@ def _check_package(args: dict[str, Any]) -> dict[str, Any]:
             tree = [r for r in tree if canonicalize_name(r.name) != key]
         else:
             result = check_package(name, version, targets, pyodide_locks=locks)
+            asked = [result]
     except (PyodideLockError, SourceError) as e:  # a lock for a Python no pyodide target uses; an unsettled tree
         raise ToolError(str(e)) from e
     out: dict[str, Any] = result.to_dict(explain=explain)
@@ -474,8 +475,17 @@ def _check_package(args: dict[str, Any]) -> dict[str, Any]:
             if len(wheels) > EXPLAIN_LIMIT
         }
         out["rejected"] = {label: wheels[:EXPLAIN_LIMIT] for label, wheels in out["rejected"].items()}
-    out["ok"] = result.ok and all(r.ok for r in tree)
-    out["gaps"] = [t.label(True) for t in result.gaps]
+    # With several Pythons the package can resolve to a release per Python: its rows together are its answer.
+    statuses: dict[Any, Status] = {}
+    for r in asked:
+        for t, s in r.statuses.items():
+            if s is not Status.NOT_NEEDED or t not in statuses:
+                statuses[t] = s
+    if len(asked) > 1:
+        out["results"] = {t.label(True): s.value for t, s in statuses.items()}
+        out["versions"] = sorted({r.version for r in asked if r.version})
+    out["ok"] = all(r.ok for r in asked) and all(r.ok for r in tree)
+    out["gaps"] = list(dict.fromkeys(t.label(True) for r in asked for t in r.gaps))
     if dependencies:
         out["dependencies_checked"] = len(tree)
         out["dependency_gaps"] = [
