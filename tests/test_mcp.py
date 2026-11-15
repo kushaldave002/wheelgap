@@ -571,7 +571,25 @@ def test_check_dockerfile_reports_used_arg_defaults(
     assert all("-p/-t" not in note for note in data["notes"])
     for name, value in defaults.items():
         assert any(f"FROM uses the default of ARG {name}={value}" in note for note in data["notes"])
-    assert any("use check_lockfile with python and targets instead" in note for note in data["notes"])
+    assert any("pass build_args if the build sets --build-arg" in note for note in data["notes"])
+
+
+def test_check_dockerfile_build_args_replace_the_defaults(fake_pypi, tmp_path, fixtures):
+    dockerfile = dockerfile_project(tmp_path, fixtures, "ARG PY=3.12\nARG DISTRO\nFROM python:${PY}-${DISTRO}\n")
+    build_args = {"PY": "3.13", "DISTRO": "alpine"}
+    (_, reply) = run(init(), call("check_dockerfile", dockerfile=str(dockerfile), build_args=build_args))
+    data = reply["result"]["structuredContent"]
+    assert data["image"]["build_args"] == build_args
+    assert data["image"]["platform"] == "musl-x86_64"
+    assert data["targets"] == ["3.13 musl-x86_64"]
+    assert all("-p/-t" not in note and "default of ARG" not in note for note in data["notes"])
+
+
+def test_check_dockerfile_build_args_must_be_strings(tmp_path, fixtures):
+    dockerfile = dockerfile_project(tmp_path, fixtures, "FROM python:3.13-slim\n")
+    (_, reply) = run(init(), call("check_dockerfile", dockerfile=str(dockerfile), build_args={"PY": 3}))
+    assert reply["result"]["isError"]
+    assert "'build_args' must be an object of strings" in reply["result"]["content"][0]["text"]
 
 
 def test_check_dockerfile_ignores_unused_arg_defaults(fake_pypi, tmp_path, fixtures):

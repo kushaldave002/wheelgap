@@ -266,7 +266,7 @@ TOOLS: list[dict[str, Any]] = [
             "linux/amd64) and glibc or musl version (python:3.13-alpine means musl) set the target. Use it before "
             "changing a FROM line, e.g. from -slim to -alpine or to --platform=linux/arm64. Returns what "
             "check_lockfile returns, plus 'image': the python, platform, glibc, musl and build_args wheelgap read "
-            "from the Dockerfile (build_args maps global ARG defaults used by FROM to their values). A Dockerfile "
+            "from the Dockerfile (build_args maps the global ARGs used by FROM to their values). A Dockerfile "
             "wheelgap can't read the way Docker does is a tool error saying what to pass "
             "instead. " + _STATUS_HELP
         ),
@@ -282,6 +282,12 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Absolute path or file:// URI of the lockfile or project directory. Default: the "
                     "Dockerfile's folder.",
+                },
+                "build_args": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                    "description": "The build's `--build-arg` values, e.g. {'PYTHON_VERSION': '3.13'}: each replaces "
+                    "the default of the global ARG it names, as in docker build.",
                 },
                 "targets": _TARGETS_PROP
                 | {
@@ -541,14 +547,18 @@ def _check_dockerfile(args: dict[str, Any]) -> dict[str, Any]:
         raise ToolError(f"{args['dockerfile']}: is a directory (pass the Dockerfile itself)")
     raw = (_string(args, "path") or "").strip()
     path = _existing(raw) if raw else dockerfile.parent
+    build_args = args.get("build_args") or {}
+    if not isinstance(build_args, dict) or not all(isinstance(v, str) for v in build_args.values()):
+        raise ToolError("'build_args' must be an object of strings")
     try:
-        image = read_dockerfile(dockerfile)
+        image = read_dockerfile(dockerfile, build_args)
     except DockerfileError as e:  # wheelgap's message; its CLI advice, where it gives some, translated
         message = str(e).replace("pass -p/-t instead", "use check_lockfile with python and targets instead")
         raise ToolError(message) from e
     except OSError as e:  # a Dockerfile that can't be read
         raise ToolError(f"{args['dockerfile']}: {e.strerror or e}") from e
     argv = ["--json", f"--dockerfile={dockerfile}"]
+    argv += [f"--build-arg={name}={value}" for name, value in build_args.items()]
     argv += [f"--target={p}" for p in _platforms(args)]
     try:
         out = _run_cli(argv, path)
@@ -566,8 +576,8 @@ def _check_dockerfile(args: dict[str, Any]) -> dict[str, Any]:
     # The CLI flags cannot be passed to check_dockerfile: give the corresponding MCP tool advice instead.
     out["notes"] = [
         note.replace(
-            "pass -p/-t if the build sets --build-arg",
-            "if the build sets --build-arg, use check_lockfile with python and targets instead",
+            "pass --build-arg if the build sets one",
+            "pass build_args if the build sets --build-arg",
         )
         if "FROM uses the default of ARG " in note
         else note

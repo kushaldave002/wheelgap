@@ -403,7 +403,7 @@ def test_dockerfile_it_cant_read(tmp_path):
     (tmp_path / "Dockerfile").write_text("ARG BASE\nFROM $BASE\n")
     found = suggest(tmp_path)
     assert found.targets == []
-    assert unreadable(found) == [("Dockerfile", None, "ARG BASE has no default: a --build-arg value isn't read")]
+    assert unreadable(found) == [("Dockerfile", None, "ARG BASE has no default and no --build-arg BASE=VALUE")]
 
 
 def test_glibc_is_left_out_when_the_sources_disagree(tmp_path, capsys):

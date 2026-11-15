@@ -232,6 +232,73 @@ def test_base_stage_global_arg_default_is_used(tmp_path):
     assert image.build_args == (("PY", "3.12"),)
 
 
+@pytest.mark.parametrize(
+    ("dockerfile", "build_args", "python"),
+    [
+        ("ARG PY=3.12\nFROM python:${PY}-slim\n", {"PY": "3.13"}, "3.13"),  # replaces the default
+        ("ARG PY\nFROM python:${PY}-slim\n", {"PY": "3.14"}, "3.14"),  # fills an ARG with none
+        ("ARG PY=3.12\nFROM python:${PY}-slim\n", {}, "3.12"),
+    ],
+)
+def test_build_arg_sets_the_global_arg(tmp_path, dockerfile, build_args, python):
+    path = tmp_path / "Dockerfile"
+    path.write_text(dockerfile, encoding="utf-8")
+    image = read_dockerfile(path, build_args)
+    assert image == ImageTarget(python, "linux-x86_64", glibc="2.41")
+    assert image.build_args == (("PY", python),)
+    assert image.given_args == frozenset(build_args)
+
+
+def test_build_arg_no_global_arg_declares_is_ignored(tmp_path):
+    # Docker uses a --build-arg in FROM only for an ARG declared before the first FROM.
+    path = tmp_path / "Dockerfile"
+    path.write_text("FROM python:3.13-slim\nARG PY=3.12\n", encoding="utf-8")
+    image = read_dockerfile(path, {"PY": "3.11"})
+    assert image == ImageTarget("3.13", "linux-x86_64", glibc="2.41")
+    assert image.undeclared_args == ("PY",)
+
+
+@pytest.mark.parametrize(
+    ("value", "error"),
+    [
+        ("3.1$X", r"--build-arg PY=3\.1\$X: values with quotes, escapes or \$ aren't supported"),
+        ('"3.13"', '--build-arg PY="3.13": values with quotes'),
+        ("", "--build-arg PY is empty"),
+    ],
+)
+def test_build_arg_values_follow_the_rules_for_defaults(tmp_path, value, error):
+    path = tmp_path / "Dockerfile"
+    path.write_text("ARG PY=3.12\nFROM python:${PY}-slim\n", encoding="utf-8")
+    with pytest.raises(DockerfileError, match=error):
+        read_dockerfile(path, {"PY": value})
+
+
+def test_cli_build_arg_picks_the_image_and_says_where_values_came_from(tmp_path, capsys, fake_pypi):
+    path = tmp_path / "Dockerfile"
+    path.write_text("ARG PY=3.12\nARG DISTRO=slim\nFROM python:${PY}-${DISTRO}\n", encoding="utf-8")
+    main(["purewheel", "--dockerfile", str(path), "--build-arg", "PY=3.13", "--build-arg", "NOPE=1", "--json"])
+    captured = capsys.readouterr()
+    assert [(t["python"], t["platform"]) for t in json.loads(captured.out)["targets"]] == [("3.13", "linux-x86_64")]
+    assert f"wheelgap: note: {path}: FROM uses --build-arg PY=3.13\n" in captured.err
+    assert f"{path}: FROM uses the default of ARG DISTRO=slim; pass --build-arg if the build sets one" in captured.err
+    assert "no ARG NOPE before the first FROM" in captured.err
+
+
+@pytest.mark.parametrize(
+    ("argv", "error"),
+    [
+        (["--build-arg", "PY=3.13"], "--build-arg only sets the ARGs of --dockerfile"),
+        (["--dockerfile", "Dockerfile", "--build-arg", "PY"], "--build-arg PY: expected NAME=VALUE"),
+        (["--dockerfile", "Dockerfile", "--build-arg", "1PY=3"], "--build-arg 1PY=3: expected NAME=VALUE"),
+    ],
+)
+def test_cli_build_arg_usage_errors(capsys, argv, error):
+    with pytest.raises(SystemExit) as exc:
+        main(["purewheel", *argv])
+    assert exc.value.code == 2
+    assert error in capsys.readouterr().err
+
+
 AUTOMATIC = [
     "BUILDPLATFORM", "BUILDOS", "BUILDOSVERSION", "BUILDARCH", "BUILDVARIANT",
     "TARGETPLATFORM", "TARGETOS", "TARGETOSVERSION", "TARGETARCH", "TARGETVARIANT", "TARGETSTAGE",

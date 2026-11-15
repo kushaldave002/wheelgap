@@ -66,6 +66,14 @@ unless `--dockerfile`, `[tool.wheelgap] targets` or uv's `required-environments`
 final stage, such as `FROM python:3.13-alpine`. `-p`, `-t`, `--glibc` and `--musl` still win. See
 [From a Dockerfile](targets.md#from-a-dockerfile).
 
+### `--build-arg` {#build-arg}
+
+**After 0.11.0.** `--build-arg NAME=VALUE` (repeatable, with `--dockerfile`): the value `docker build --build-arg`
+gives a global ARG, so `FROM python:${PYTHON_VERSION}-slim` is read with the Python the build picks. It replaces the
+ARG's default, or gives a value to an ARG with none; values follow the same rules as defaults (no quotes, escapes or
+`$`). A name no ARG before the first `FROM` declares is ignored, as Docker ignores it there, with a note. See
+[From a Dockerfile](targets.md#from-a-dockerfile).
+
 ### `--pyodide-lock` {#pyodide-lock}
 
 `--pyodide-lock PATH_OR_HTTPS_URL`: a Pyodide release's `pyodide-lock.json`. Packages Pyodide ships itself count as
@@ -364,7 +372,7 @@ the platforms as JSON. Can't be combined with `--markdown`.
 `--suggest-targets [DIR]`: read the platforms and Pythons that `DIR` (default: the current directory)
 already names in its GitHub Actions workflows and Dockerfiles, print each with the file and line it came from, then a
 `[tool.wheelgap]` snippet to paste into `pyproject.toml`. It only suggests: nothing is changed or checked, and it exits
-0. With `--json`, it prints the same as an object. It can't be combined with `-p`, `-t`, `--dockerfile`,
+0. With `--json`, it prints the same as an object. It can't be combined with `-p`, `-t`, `--dockerfile`, `--build-arg`,
 `--list-targets`, `--markdown` or input files, and a `DIR` that isn't a folder exits 2. What it can't read for sure is
 listed with its file and line rather than guessed. See
 [Suggest targets from your CI and Dockerfiles](targets.md#suggest-targets).

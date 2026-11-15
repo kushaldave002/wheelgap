@@ -190,6 +190,13 @@ def make_parser() -> argparse.ArgumentParser:
         help="take -p/-t (and --glibc/--musl) from the final stage's image, e.g. FROM python:3.13-alpine",
     )
     p.add_argument(
+        "--build-arg",
+        action="append",
+        metavar="NAME=VALUE",
+        help="with --dockerfile, a value for a global ARG used in FROM, as docker build --build-arg sets it "
+        "(repeatable)",
+    )
+    p.add_argument(
         "--pyodide-lock",
         metavar="PATH_OR_HTTPS_URL",
         help="a Pyodide release's pyodide-lock.json: packages Pyodide ships itself count as available on -t pyodide",
@@ -1506,6 +1513,7 @@ def _main(argv: list[str]) -> int:
                 ("-p", args.python),
                 ("-t", args.target),
                 ("--dockerfile", args.dockerfile),
+                ("--build-arg", args.build_arg),
                 ("--list-targets", args.list_targets),
             )
             if value
@@ -1524,6 +1532,14 @@ def _main(argv: list[str]) -> int:
         return 0
     if args.conda_forge and not args.explain:
         parser.error("--conda-forge only adds to --explain; pass --explain too")
+    build_args: dict[str, str] = {}
+    for item in args.build_arg or []:
+        name, eq, value = item.partition("=")
+        if not eq or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name, re.ASCII):
+            parser.error(f"--build-arg {item}: expected NAME=VALUE")
+        build_args[name] = value  # a later one wins, as in docker build
+    if build_args and not args.dockerfile:
+        parser.error("--build-arg only sets the ARGs of --dockerfile; pass --dockerfile too")
     if args.suggest and not args.explain:
         parser.error("--suggest only adds to --explain; pass --explain too")
     if args.write_constraints is not None and not args.suggest:
@@ -1554,12 +1570,18 @@ def _main(argv: list[str]) -> int:
         docker_musl = False
         if args.dockerfile:
             # The image beats pyproject.toml; flags still win.
-            image = read_dockerfile(Path(args.dockerfile))
+            image = read_dockerfile(Path(args.dockerfile), build_args)
             if not quiet:
                 for name, value in image.build_args:
+                    if name in image.given_args:
+                        note = f"FROM uses --build-arg {name}={value}"
+                    else:
+                        note = f"FROM uses the default of ARG {name}={value}; pass --build-arg if the build sets one"
+                    print(f"wheelgap: note: {args.dockerfile}: {note}", file=sys.stderr)
+                for name in image.undeclared_args:
                     print(
-                        f"wheelgap: note: {args.dockerfile}: FROM uses the default of ARG {name}={value}; "
-                        "pass -p/-t if the build sets --build-arg",
+                        f"wheelgap: note: {args.dockerfile}: no ARG {name} before the first FROM, so "
+                        f"--build-arg {name} doesn't change the image (Docker ignores it there too)",
                         file=sys.stderr,
                     )
             docker_musl = image.platform.startswith("musl-")

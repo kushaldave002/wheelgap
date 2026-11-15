@@ -178,6 +178,12 @@ built on (bullseye for 3.10 and 3.11, bookworm for 3.12 and 3.13, trixie for 3.1
 (`3.16-rc-slim`) keeps the `--glibc` default, and one older than 3.10 is an error. Pin `-bookworm` or `-trixie` for an
 answer that doesn't move. A Dockerfile wheelgap can't read the way Docker does is an error, not a guess.
 
+A global `ARG` used in the final stage's `FROM` (`ARG PYTHON_VERSION=3.12` then `FROM python:${PYTHON_VERSION}-slim`)
+is read from its default, with a note. **After 0.11.0**, when the build picks the value
+(`docker build --build-arg PYTHON_VERSION=3.13 .`), pass the same [`--build-arg`](cli.md#build-arg): it replaces the
+default, and gives a value to an ARG with none, so the platform needn't be spelled out again with `-t`. The note says
+which values came from `--build-arg` and which were defaults.
+
 ## Suggest targets from your CI and Dockerfiles {#suggest-targets}
 
 `wheelgap --suggest-targets [DIR]` (default: the current directory) reads the platforms and Pythons the project already

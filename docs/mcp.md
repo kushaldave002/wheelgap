@@ -35,10 +35,10 @@ All five are read-only. They look packages up on PyPI, or on the index in
   Dockerfile's folder), plus the `image` it read (`python`, `platform`,
   `glibc`, `musl`, `build_args`), so an agent can ask before switching `python:3.13-slim` to
   `-alpine` or adding `--platform=linux/arm64`. `build_args` maps global ARG names
-  used by the image's `FROM` to their defaults (or `{}` if none were used). If a
-  Docker build overrides them with `--build-arg`, use `check_lockfile` with
-  explicit `python` and `targets` instead. A Dockerfile wheelgap can't read
-  is a tool error.
+  used by the image's `FROM` to their values (or `{}` if none were used). If a
+  Docker build overrides them with `--build-arg`, pass the same values as the
+  `build_args` argument (**After 0.11.0**), as `--build-arg` does on the
+  command line. A Dockerfile wheelgap can't read is a tool error.
 - `diff_lockfiles`: takes an `old` and a `new` lockfile (plus `python` and
   `targets`) and answers as `wheelgap diff OLD NEW --json` does, with `ok`
   added: the packages that got worse on a target and the new ones with gaps. An
