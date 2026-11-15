@@ -69,7 +69,7 @@ from packaging.utils import InvalidWheelFilename, canonicalize_name, parse_wheel
 from packaging.version import InvalidVersion, Version
 
 import wheelgap
-from wheelgap.check import SDIST_SUFFIXES, Status, check
+from wheelgap.check import SDIST_SUFFIXES, Status, _uv_source_matches, check
 from wheelgap.sources import Edge, Package, Source, load_file
 
 CORPUS = Path(__file__).parents[1] / "tests" / "fixtures" / "real"
@@ -278,11 +278,16 @@ def _gated(source: Source, i: int, seen: frozenset[int] = frozenset()) -> bool:
     ways_in: list[tuple[int | None, str | None]] = [
         (None, m) for n, _, m, _ in source.root_edges if canonicalize_name(n) == pkg.key
     ]
+    uv = source.uv_packages
     for parent, edges in source.edges.items():
-        for n, v, m, _ in edges:
+        for n, v, m, s in edges:
             # uv pins the version on an edge only where a name has several; Poetry's is a constraint, not a pin.
-            if canonicalize_name(n) == pkg.key and (v is None or v == pkg.version or source.kind == "poetry"):
-                ways_in.append((parent, m))
+            if canonicalize_name(n) != pkg.key or not (v is None or v == pkg.version or source.kind == "poetry"):
+                continue
+            # uv also names the source where one name and version come from several indexes, as check.py matches.
+            if s is not None and uv is not None and not _uv_source_matches(uv[i], s):
+                continue
+            ways_in.append((parent, m))
     return bool(ways_in) and all(
         m or (p is not None and p not in seen and _gated(source, p, seen | {i})) for p, m in ways_in
     )

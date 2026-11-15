@@ -18,7 +18,7 @@ import pytest
 
 import wheelgap
 from wheelgap.check import Status, check
-from wheelgap.sources import SourceError, file_kind
+from wheelgap.sources import SourceError, file_kind, load_file
 
 
 def _script():
@@ -501,3 +501,24 @@ def test_main_pinned_reads_the_copies_offline(monkeypatch, capsys):
         "ok   python-poetry/cleo poetry.lock (pinned copy): lock-version '2.0'; 53 packages\n"
         "ok   py-pdf/pdfly pylock.toml (pinned copy): lock-version '1.0'; 104 packages\n"
     )
+
+
+def test_gated_matches_uv_edges_by_source_too(tmp_path):
+    # Two torch 2.5.0 entries from different indexes: each is gated by its own edge's marker, not by the other's.
+    cpu, pypi = '{ registry = "https://download.pytorch.org/whl/cpu" }', '{ registry = "https://pypi.org/simple" }'
+    path = tmp_path / "uv.lock"
+    path.write_text(
+        UV_HEAD + UV_ROOT + "dependencies = [\n"
+        f'    {{ name = "torch", version = "2.5.0", source = {cpu}, marker = "sys_platform == \'linux\'" }},\n'
+        '    { name = "lib" },\n]\n\n'
+        f'[[package]]\nname = "lib"\nversion = "1.0"\nsource = {pypi}\n'
+        f'dependencies = [{{ name = "torch", version = "2.5.0", source = {pypi} }}]\n\n'
+        f'[[package]]\nname = "torch"\nversion = "2.5.0"\nsource = {cpu}\n\n'
+        f'[[package]]\nname = "torch"\nversion = "2.5.0"\nsource = {pypi}\n',
+        encoding="utf-8",
+    )
+    source = load_file(path)
+    on_cpu, on_pypi = (i for i, p in enumerate(source.packages) if p.key == "torch")
+    assert source.uv_packages[on_cpu]["source"]["registry"].endswith("/cpu")
+    assert script._gated(source, on_cpu)  # only the marked edge from app names this entry
+    assert not script._gated(source, on_pypi)  # lib's edge has no marker, and lib has none on the way in
