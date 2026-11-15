@@ -106,6 +106,25 @@ def test_check_packages_mixes_names_and_pins(fake_pypi):
     assert by_name["does-not-exist"].statuses[targets[0]] is Status.UNKNOWN
 
 
+@pytest.mark.parametrize("check_one", [False, True])
+def test_package_pin_respects_requires_python_per_target(fake_pypi, check_one):
+    old, new = wheelgap.make_targets(python="3.9,3.13", platforms="linux-x86_64")
+    if check_one:
+        result = wheelgap.check_package("pythonranged", "2.0", targets=[old, new])
+    else:
+        (result,) = wheelgap.check_packages([("pythonranged", "2.0")], targets=[old, new])
+    assert result.statuses == {old: Status.MISSING, new: Status.WHEEL}
+    assert result.files == ("pythonranged-2.0-py3-none-any.whl",)
+    assert result.pure
+    rejected = [("pythonranged-2.0-py3-none-any.whl", "requires Python >=3.10")]
+    assert result.rejected == {old: rejected}
+    assert result.reasons == {old: "pythonranged-2.0-py3-none-any.whl  requires Python >=3.10"}
+    assert result.to_dict(explain=True)["rejected"] == {
+        old.label(True): [{"file": f, "reason": why} for f, why in rejected]
+    }
+    assert fake_pypi == ["https://pypi.org/pypi/pythonranged/2.0/json"]
+
+
 def test_check_packages_counts_what_pyodide_bundles(fake_pypi, fixtures):
     lock = load_pyodide_lock(str(fixtures / "pyodide-lock.json"))  # Python 3.13
     linux, pyodide = wheelgap.make_targets(python="3.13", platforms=["linux-x86_64", "pyodide"])
