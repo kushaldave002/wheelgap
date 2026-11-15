@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- MCP: `check_package` takes `dependencies: true` to also check everything the package installs, resolved as `--deps` does: `dependency_gaps` lists each package in the tree with a gap, with its `results`, `gaps` and `via` path (`mcp → PyJWT → cryptography`), `dependencies_checked` counts the packages checked, and `ok` covers the whole tree. (#390, thanks [@kushaldave002](https://github.com/kushaldave002))
 - `--deps` also resolves the transitive dependencies of a `pyproject.toml`, including selected extras and target-specific markers. (#386, thanks [@Golden007-prog](https://github.com/Golden007-prog))
 - `--badge PATH` writes a [shields.io endpoint](https://shields.io/badges/endpoint-badge) file with how many of the checked targets have wheels for everything, such as `7/8 targets`: a target counts when nothing on it is `source` or `missing`, and any `unknown` result makes it `unknown`. It's written even when the check fails, so CI can publish it; docs/recipes.md shows a README badge from GitHub Pages. (#385, thanks [@kushaldave002](https://github.com/kushaldave002))
 - Python API: `check_packages()` and `check_package()` take `deps=True` to also check everything the packages install, resolved for each target from PyPI's metadata as `--deps` does: a `Result` for every package in the tree, with `via` giving each gap's path (`mcp → PyJWT → cryptography`), and the same `DepsError` when the tree can't be settled. `check_package(deps=True)` returns a list. (#383, thanks [@kushaldave002](https://github.com/kushaldave002))
