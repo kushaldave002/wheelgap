@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `--dockerfile` and `--suggest-targets` now expand plain global `ARG` defaults in images and platforms, such as `ARG PYTHON_VERSION=3.12` followed by `FROM python:${PYTHON_VERSION}-slim`. The CLI notes the defaults used and how to override them for builds using `--build-arg`.
+- `--dockerfile` and `--suggest-targets` now expand plain global `ARG` defaults in images and platforms, such as `ARG PYTHON_VERSION=3.12` followed by `FROM python:${PYTHON_VERSION}-slim`. The CLI notes the defaults used and how to override them for builds using `--build-arg`. (#313, thanks [@kushaldave002](https://github.com/kushaldave002))
 
 - `--dockerfile` now recognizes `index.docker.io/python` and `index.docker.io/library/python` as official Python images. (#306, thanks [@LetMeSleep8h](https://github.com/LetMeSleep8h))
 - A file URL that can't be parsed in `uv.lock`, `pylock.toml`, `poetry.lock` or `pdm.lock` (an unclosed IPv6 bracket, or a space in the host) is now an input error (exit 2) that names the lock file and the package, such as `uv.lock: package b has a file URL that can't be parsed`, instead of `ValueError: Invalid IPv6 URL`. A URL with a space in its host used to be read as if it were fine. (#304, thanks [@Franky100-pig](https://github.com/Franky100-pig))
