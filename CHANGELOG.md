@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Python API: `check_packages()` and `check_package()` take `deps=True` to also check everything the packages install, resolved for each target from PyPI's metadata as `--deps` does: a `Result` for every package in the tree, with `via` giving each gap's path (`mcp → PyJWT → cryptography`), and the same `DepsError` when the tree can't be settled. `check_package(deps=True)` returns a list. (#383, thanks [@kushaldave002](https://github.com/kushaldave002))
 - MCP: `check_package` now returns `last_with_wheel`, as `--explain --suggest --json` does: for each gap target no newer release has a wheel for, the newest older release that has one, so an agent can say which version to pin. (#373, thanks [@kushaldave002](https://github.com/kushaldave002))
 - `--dockerfile`: a global `ARG` for a name BuildKit sets itself (`TARGETARCH`, `TARGETPLATFORM`, `BUILDPLATFORM` and the rest) with no default now says the value is set by the build, not that a `--build-arg` value isn't read. One with a default is still used as BuildKit does: the default replaces the automatic value. (#371, thanks [@kushaldave002](https://github.com/kushaldave002))
 
