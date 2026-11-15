@@ -188,6 +188,43 @@ The loop stops at the first failing check and exits with its code, so later
 lockfiles aren't checked and a later successful check can't hide an earlier gap
 or input error.
 
+## README badge
+
+**After 0.11.0.** [`--badge PATH`](cli.md#badge) writes a [shields.io endpoint](https://shields.io/badges/endpoint-badge)
+file saying how many of your targets have wheels for everything (`8/8 targets`). Publish it from CI, even when the
+check fails, and point a badge at it. With GitHub Pages:
+
+```yaml
+name: wheels badge
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  badge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - run: mkdir -p badge && uvx wheelgap uv.lock --badge badge/wheels.json || true  # the badge shows gaps
+      - uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./badge
+          keep_files: true
+```
+
+`|| true` keeps a gap from failing this job; your usual wheelgap check still fails on it.
+
+Then add the badge to your README:
+
+```markdown
+![wheels](https://img.shields.io/endpoint?url=https://OWNER.github.io/REPO/wheels.json)
+```
+
+Any host that serves the file over HTTPS works the same way, such as a gist's raw URL.
+
 ## Will `pip install X` work on my platform?
 
 To check a package's whole dependency tree without installing it, have

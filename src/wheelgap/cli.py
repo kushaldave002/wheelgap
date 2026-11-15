@@ -23,6 +23,7 @@ from . import __version__, cache, condaforge, origin
 from . import notes as tracker
 from . import suggest as release_suggest
 from .api import running_python
+from .badge import write_badge
 from .build import BuildInfo, describe, lookup_all, requires_for, shown
 from .check import CELL, EXPLAIN_LIMIT, Row, Status, check, explain, explain_lines, marker_holds, reachable
 from .deps import Resolver, resolve_deps
@@ -271,6 +272,11 @@ def make_parser() -> argparse.ArgumentParser:
         "--junit",
         metavar="PATH",
         help="also write a JUnit XML report to PATH, alongside the usual output",
+    )
+    p.add_argument(
+        "--badge",
+        metavar="PATH",
+        help="also write a shields.io endpoint JSON file to PATH with how many targets have wheels for everything",
     )
     p.add_argument(
         "--ignore",
@@ -1899,6 +1905,13 @@ def _main(argv: list[str]) -> int:
     if args.junit is not None:  # an empty PATH (an unset CI variable) is an error, not "no report"
         try:
             write_junit(args.junit, rows, targets, fail_on, advisory)
+        except OSError as e:
+            print(f"wheelgap: error: {e}", file=sys.stderr)
+            return input_error_json(e) if args.json else 2
+
+    if args.badge is not None:  # written even when the check fails, so CI can publish it; an empty PATH is an error
+        try:
+            write_badge(args.badge, rows, targets)
         except OSError as e:
             print(f"wheelgap: error: {e}", file=sys.stderr)
             return input_error_json(e) if args.json else 2

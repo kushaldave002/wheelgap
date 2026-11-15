@@ -257,6 +257,16 @@ a pull request comment. See [Output](output.md#markdown).
 `--junit PATH`: also write a JUnit XML report to `PATH`, alongside the usual output. See
 [Output](output.md#junit-xml).
 
+### `--badge` {#badge}
+
+**After 0.11.0.** `--badge PATH`: also write a [shields.io endpoint](https://shields.io/badges/endpoint-badge) file
+to `PATH`, alongside the usual output, with how many of the checked targets have wheels for everything:
+`{"schemaVersion": 1, "label": "wheels", "message": "7/8 targets", "color": "yellow"}`. A target counts when nothing on
+it is `source` or `missing` (a gap `--ignore` accepts there doesn't count against it; an `--advisory` target's gaps
+do). The colour is `brightgreen` when every target counts, `red` when none does and `yellow` in between. If any result
+is `unknown`, the message is `unknown` (`lightgrey`) instead of a count. The file is written even when the check fails,
+so CI can publish it; an empty `PATH` is an error, as for `--junit`. See [Recipes](recipes.md#readme-badge).
+
 ### `--github-annotations` {#github-annotations}
 
 Also mark each package with a gap on its own line of the lockfile in GitHub Actions, as an
