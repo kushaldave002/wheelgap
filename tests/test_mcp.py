@@ -110,7 +110,42 @@ def test_check_package(fake_pypi):
     assert data["gaps"] == ["3.13 linux-aarch64"]
     assert data["version"] == "311"
     assert data["assumes"] == {"glibc": "2.36", "musl": "1.2", "macos": "14.0"}
-    assert fake_pypi == ["https://pypi.org/pypi/winonly/json"]
+    assert data["last_with_wheel"] == {}
+    # The second request reads the older releases for last_with_wheel, as --suggest does.
+    assert fake_pypi == ["https://pypi.org/pypi/winonly/json"] * 2
+
+
+WHEELSTOPPED = {
+    "1.0": ["wheelstopped-1.0-cp313-cp313-win_arm64.whl", "wheelstopped-1.0.tar.gz"],
+    "1.1": ["wheelstopped-1.1-cp313-cp313-win_arm64.whl", "wheelstopped-1.1.tar.gz"],
+    "1.2": ["wheelstopped-1.2.tar.gz"],
+    "2.0": ["wheelstopped-2.0.tar.gz"],
+}
+
+
+def test_check_package_names_the_last_older_release_with_a_wheel(fake_pypi, monkeypatch):
+    # As --explain --suggest --json does: by gap target no newer release has a wheel for, the newest older one with one.
+    monkeypatch.setitem(FAKE_INDEX, "wheelstopped", WHEELSTOPPED)
+    targets = ["win-arm64", "linux-riscv64"]
+    (_, reply) = run(init(), call("check_package", name="wheelstopped", python="3.13", targets=targets))
+    data = reply["result"]["structuredContent"]
+    assert data["version"] == "2.0"
+    assert data["gaps"] == ["3.13 win-arm64", "3.13 linux-riscv64"]
+    assert data["last_with_wheel"] == {"3.13 win-arm64": "1.1"}
+
+
+def test_check_package_looks_up_older_releases_only_for_gaps_on_pypi(fake_pypi, monkeypatch):
+    monkeypatch.setitem(FAKE_INDEX, "wheelstopped", WHEELSTOPPED)
+    (_, reply) = run(init(), call("check_package", name="purewheel", python="3.13", targets=["linux-x86_64"]))
+    assert "last_with_wheel" not in reply["result"]["structuredContent"]  # no gap, so nothing to look up
+    assert fake_pypi == ["https://pypi.org/pypi/purewheel/json"]
+    # Another index may hold private names next to PyPI's, so --suggest's rule applies: nothing is looked up.
+    monkeypatch.setenv("WHEELGAP_INDEX_URL", "https://mirror.example/pypi")
+    fake_pypi.clear()
+    (_, reply) = run(init(), call("check_package", name="wheelstopped", python="3.13", targets=["win-arm64"]))
+    assert reply["result"]["structuredContent"]["gaps"] == ["3.13 win-arm64"]
+    assert "last_with_wheel" not in reply["result"]["structuredContent"]
+    assert fake_pypi == ["https://mirror.example/pypi/wheelstopped/json"]
 
 
 def test_check_package_pin_respects_requires_python_per_target(fake_pypi):
@@ -175,7 +210,7 @@ def test_check_package_without_explain_has_no_explain_keys(fake_pypi, extra):
     (_, reply) = run(init(), call("check_package", name="nowheels", python="3.13", targets=["linux-x86_64"], **extra))
     data = reply["result"]["structuredContent"]
     assert data["results"] == {"3.13 linux-x86_64": "source"}
-    assert set(data) == {"name", "version", "error", "results", "ok", "gaps", "targets", "assumes"}
+    assert set(data) == {"name", "version", "error", "results", "ok", "gaps", "targets", "assumes", "last_with_wheel"}
 
 
 def test_check_package_explain_caps_rejected_wheels(fake_pypi, monkeypatch):

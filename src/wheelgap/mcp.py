@@ -46,9 +46,11 @@ from contextvars import ContextVar
 from pathlib import Path, PurePath
 from typing import Any, BinaryIO
 
+from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
-from . import __version__, pypi
+from . import __version__, origin, pypi
+from . import suggest as release_suggest
 from .api import Result, check_package, make_targets, running_python
 from .check import EXPLAIN_LIMIT, Status
 from .dockerfile import DockerfileError, read_dockerfile
@@ -164,7 +166,10 @@ TOOLS: list[dict[str, Any]] = [
             "target's status, the targets with a gap, ok (true only if every target installs without building) and "
             "the libc and macOS versions assumed. With explain: true, also says why: rejected lists, for each "
             f"source or missing target, up to {EXPLAIN_LIMIT} wheels it can't use and the reason for each, closest "
-            "misses first (rejected_omitted counts any more), as wheelgap --json --explain does. " + _STATUS_HELP
+            "misses first (rejected_omitted counts any more), as wheelgap --json --explain does. With gaps, "
+            "last_with_wheel maps each gap target no newer release has a wheel for to the newest older release that "
+            "has one (a version to pin to), as --explain --suggest --json does; it's absent when nothing was looked "
+            "up. " + _STATUS_HELP
         ),
         "inputSchema": {
             "type": "object",
@@ -387,6 +392,20 @@ def _lock_spec(args: dict[str, Any]) -> str:
     return str(Path(spec).expanduser())
 
 
+def _last_with_wheel(result: Result) -> dict[str, str] | None:
+    """By gap target no newer release has a wheel for, the newest older release with one, as --suggest finds it
+    (`last_with_wheel` in --explain --suggest --json). None when nothing was looked up: no gap, no version, another
+    index (which may hold private names, so --suggest looks nothing up there either) or a failed lookup."""
+    if not result.version or not result.gaps or origin.other_index() is not None:
+        return None
+    keep = [t for t, s in result.statuses.items() if s is Status.WHEEL]
+    key = canonicalize_name(result.name)
+    found, _ = release_suggest.look_up_all({key: [(result.version, result.gaps, keep)]})
+    if key not in found:
+        return None
+    return {t.label(True): v for t, v in found[key][0].last.items()}
+
+
 def _check_package(args: dict[str, Any]) -> dict[str, Any]:
     _check_keys("check_package", args)
     explain = args.get("explain")
@@ -430,6 +449,8 @@ def _check_package(args: dict[str, Any]) -> dict[str, Any]:
     out["ok"] = result.ok
     out["gaps"] = [t.label(True) for t in result.gaps]
     out["targets"] = [t.label(True) for t in targets]
+    if (last := _last_with_wheel(result)) is not None:
+        out["last_with_wheel"] = last
     out["assumes"] = {
         "glibc": versions.get("glibc", DEFAULT_GLIBC),
         "musl": versions.get("musl", DEFAULT_MUSL),

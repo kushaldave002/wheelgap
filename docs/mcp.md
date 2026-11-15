@@ -219,6 +219,15 @@ reason (such as `abi3 wheels can't be used on free-threaded Python (only
 abi3t ones can)`), and `rejected_omitted` counting any it left out. Without
 `explain`, the result has only the statuses, which keeps it small.
 
+When a package has gaps, `check_package` also returns `last_with_wheel`, as
+`wheelgap --explain --suggest --json` does: for each gap target that no newer
+release has a wheel for, the newest older release that has one (of the 50
+newest before the one checked), such as `{"3.13 win-arm64": "46.0.3"}`, so an
+agent can answer "pin cryptography to 46.0.3 or earlier". It reads the
+project's release list from PyPI, which is one more request, and is left out
+when there's no gap, when `WHEELGAP_INDEX_URL` points at another index (which
+may hold private names), or when that lookup fails.
+
 ## Protocol versions
 
 The server speaks every MCP revision from 2024-11-05 to 2026-07-28, so it works
