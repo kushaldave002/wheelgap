@@ -263,9 +263,10 @@ def make_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--suggest",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="with --explain, also name the nearest newer release with a wheel for each gap's target "
-        "(looks the PyPI packages with gaps up on pypi.org)",
+        "(looks the PyPI packages with gaps up on pypi.org; on by default with --deps, --no-suggest turns it off)",
     )
     p.add_argument(
         "--write-constraints",
@@ -1540,6 +1541,9 @@ def _main(argv: list[str]) -> int:
         build_args[name] = value  # a later one wins, as in docker build
     if build_args and not args.dockerfile:
         parser.error("--build-arg only sets the ARGs of --dockerfile; pass --dockerfile too")
+    if args.suggest is None:
+        # --deps already looks every package in the tree up on PyPI, so the way out sends no name it didn't.
+        args.suggest = bool(args.deps and args.explain)
     if args.suggest and not args.explain:
         parser.error("--suggest only adds to --explain; pass --explain too")
     if args.write_constraints is not None and not args.suggest:

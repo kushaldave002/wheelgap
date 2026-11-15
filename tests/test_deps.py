@@ -66,6 +66,9 @@ INDEX = {
     "differ": {"1.0": release(["c"], files=(LINUX, WIN_AMD), json_requires=None)},
     # Two Linux wheels agree, but the Windows one is the one a Windows source build is like.
     "sameos": {"1.0": release(["c"], files=(LINUX, "cp314-cp314-manylinux_2_17_aarch64.whl", WIN_AMD))},
+    # dropped's newest release has no Windows ARM wheel; the one before had one (#403).
+    "tool": {"1.0": release(["dropped"])},
+    "dropped": {"1.0": release(files=(WIN_ARM, LINUX)), "2.0": release(files=(LINUX,))},
 }
 DIFFERING = {
     "differ-1.0-" + WIN_AMD: ["c", "pywin"],
@@ -177,6 +180,38 @@ def test_cli_text_names_the_path_and_notes_how_it_resolved(index, capsys):
     captured = capsys.readouterr()
     assert "  via: app → lib → crypt\n" in captured.out
     assert "--deps resolved 4 packages from PyPI's metadata" in captured.err
+
+
+WAY_OUT = "dropped 2.0: no newer release has a wheel for win-arm64; the last one that did is 1.0"
+
+
+def test_explain_gives_the_way_out_by_default(index, capsys):
+    # --deps already looks every package up on PyPI, so --suggest sends nothing more (#403).
+    args = ["tool==1.0", "--deps", "-p", "3.14", "-t", "win-arm64", "--explain", "--no-cache", "--color", "never"]
+    assert main(args) == 1
+    assert WAY_OUT in capsys.readouterr().out
+    assert main([*args, "--json"]) == 1
+    rows = {p["name"]: p for p in json.loads(capsys.readouterr().out)["packages"]}
+    assert rows["dropped"]["last_with_wheel"] == {"win-arm64": "1.0"}
+    assert main([*args, "--no-suggest"]) == 1
+    assert "the last one that did" not in capsys.readouterr().out
+
+
+def test_suggest_stays_opt_in_without_deps_or_explain(index, capsys):
+    assert main(["dropped==2.0", "-p", "3.14", "-t", "win-arm64", "--explain", "--no-cache", "--color", "never"]) == 1
+    assert "the last one that did" not in capsys.readouterr().out
+    assert main(["tool==1.0", "--deps", "-p", "3.14", "-t", "win-arm64", "--no-cache", "--json"]) == 1
+    assert "suggest" not in json.loads(capsys.readouterr().out)["packages"][0]
+
+
+def test_write_constraints_works_with_deps_explain_alone(index, capsys, tmp_path):
+    out = tmp_path / "constraints.txt"
+    args = ["tool==1.0", "--deps", "-p", "3.14", "-t", "win-arm64", "--explain", "--no-cache"]
+    assert main([*args, "--write-constraints", str(out)]) == 1
+    assert "dropped==1.0" in out.read_text(encoding="utf-8")
+    with pytest.raises(SystemExit) as e:
+        main([*args, "--no-suggest", "--write-constraints", str(out)])
+    assert e.value.code == 2
 
 
 def test_without_deps_only_the_named_package_is_checked(index, capsys):
