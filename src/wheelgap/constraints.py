@@ -46,7 +46,7 @@ def constraints(
             needs = "; ".join(f"{v} for {labels(ts)}" for v, ts in by_version.items())
             left_out.append(f"# left out {name}: its gaps need different releases ({needs})")
         elif versions:
-            pinned = asked[0][0].package.version
+            pinned = (asked[0][0].package.version or "").strip()  # a lockfile's text: keep the comment on its line
             pins.append(f"{name}=={versions[0]}  # wheels for {labels(list(named))}; {pinned} has none")
         if losing:
             left_out.append(f"# left out {name} for {labels(losing)}: a release with a wheel there loses one elsewhere")

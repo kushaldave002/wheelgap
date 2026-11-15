@@ -256,8 +256,9 @@ it keeps every wheel the checked release has: a newer one as `--suggest` names i
 wheel. A package whose gaps need different releases, or whose only release with a wheel for a target drops one
 elsewhere, is left out with a comment saying why, and so is a version range that resolved to different releases on
 different Pythons. The file isn't checked against the rest of the dependency tree, so check that it still resolves:
-`pip install -c FILE -r requirements.txt` or `uv pip compile -c FILE requirements.in`. It's written even when the check
-fails; an empty `FILE` is an error, as for `--junit`.
+`pip install -c FILE -r requirements.txt` or `uv pip compile -c FILE requirements.in`. Gaps on `--advisory` targets count
+too, so a pin can move a package for a target that wouldn't fail the run. It's written even when the check fails; an
+empty `FILE` is an error, as for `--junit`.
 
 ### `-q`, `--quiet`, `--no-quiet` {#quiet}
 
