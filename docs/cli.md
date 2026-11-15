@@ -279,12 +279,12 @@ flag. With `--markdown`, it renders suggestions as a Markdown list under the exp
 
 **After 0.11.0.** With `--deps --explain` it's on by default, since `--deps` already looks every package in the tree
 up on PyPI: each gap ends with the way out, the nearest newer release with the wheel or the last older one that had
-it. It looks up the same names `--suggest` would, by the same rule. `--no-suggest` turns it off; with every other input
-it stays opt-in.
+it. That's only when `--deps` resolved every input; with a lockfile or an already-pinned requirements file among them,
+it stays opt-in, since those packages' names weren't sent to PyPI. `--no-suggest` turns it off.
 
 ### `--write-constraints` {#write-constraints}
 
-**After 0.11.0.** `--write-constraints FILE` (with `--explain --suggest`): also write what `--suggest` found to a
+**After 0.11.0.** `--write-constraints FILE` (with `--explain --suggest`, or `--deps --explain`, which turns `--suggest` on): also write what `--suggest` found to a
 pip/uv constraints file, one pin per package:
 
 ```text

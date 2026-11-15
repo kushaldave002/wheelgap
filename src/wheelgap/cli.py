@@ -1541,13 +1541,14 @@ def _main(argv: list[str]) -> int:
         build_args[name] = value  # a later one wins, as in docker build
     if build_args and not args.dockerfile:
         parser.error("--build-arg only sets the ARGs of --dockerfile; pass --dockerfile too")
-    if args.suggest is None:
-        # --deps already looks every package in the tree up on PyPI, so the way out sends no name it didn't.
-        args.suggest = bool(args.deps and args.explain)
     if args.suggest and not args.explain:
         parser.error("--suggest only adds to --explain; pass --explain too")
-    if args.write_constraints is not None and not args.suggest:
-        parser.error("--write-constraints writes what --suggest finds; pass --explain --suggest too")
+    if args.write_constraints is not None and not (
+        args.suggest or (args.suggest is None and args.deps and args.explain)
+    ):
+        parser.error(
+            "--write-constraints writes what --suggest finds; pass --explain --suggest (or --deps --explain) too"
+        )
     if args.notes and not args.explain:
         parser.error("--notes only adds to --explain; pass --explain too")
     if args.dist and args.inputs:
@@ -1755,6 +1756,17 @@ def _main(argv: list[str]) -> int:
                         "so check a lockfile instead (pip-compile, or uv pip compile)"
                     )
                 resolve_deps(source, targets, resolver)
+        if args.suggest is None:
+            # On by default only when --deps resolved every input from PyPI: then the way out sends no name --deps
+            # didn't. A lockfile or an already-pinned file among the inputs keeps --suggest opt-in.
+            args.suggest = bool(
+                args.deps and args.explain and sources and all(s.deps_paths is not None for s in sources)
+            )
+            if args.write_constraints is not None and not args.suggest:
+                raise SourceError(
+                    "--write-constraints needs --suggest: --deps turns it on only when it resolved every input, so "
+                    "pass --suggest to look the others up too"
+                )
         if args.dist:
             if args.online:
                 raise SourceError("--dist checks the files in DIR as they are; --online would check PyPI's instead")

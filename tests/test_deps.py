@@ -484,3 +484,16 @@ def test_requirements_deps_refuses_a_file_that_names_another_index(tmp_path, ind
     assert main([str(req), "--deps"]) == 2
     assert "configures an installer index or source" in capsys.readouterr().err
     assert index == []
+
+
+def test_deps_doesnt_turn_suggest_on_for_a_lockfile_among_the_inputs(index, capsys, tmp_path):
+    # The lockfile's packages weren't looked up by --deps, so their names mustn't go to PyPI by default.
+    lock = tmp_path / "pylock.toml"
+    lock.write_text(
+        'lock-version = "1.0"\n[[packages]]\nname = "secretpkg"\nversion = "1.0"\n'
+        '[[packages.wheels]]\nurl = "https://pypi.org/files/secretpkg-1.0-cp314-cp314-manylinux_2_17_x86_64.whl"\n',
+        encoding="utf-8",
+    )
+    main(["tool==1.0", str(lock), "--deps", "--explain", "-p", "3.14", "-t", "win-arm64", "--no-cache"])
+    capsys.readouterr()
+    assert not [u for u in index if "secretpkg" in u]
