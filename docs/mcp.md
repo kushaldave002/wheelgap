@@ -25,7 +25,7 @@ All five are read-only. They look packages up on PyPI, or on the index in
 
 - `check_package`: one package, the latest release or a given version, on each
   target. `explain: true` adds why each target with a gap can't use its
-  wheels.
+  wheels, and (after 0.11.0) `dependencies: true` checks what it installs too.
 - `check_lockfile`: the same answer as `wheelgap PATH --json`, `[tool.wheelgap]`
   settings included: the packages with gaps, the ones it skipped (git, path and
   private-index packages, which aren't checked) and any notes. It also returns
@@ -227,6 +227,20 @@ agent can answer "pin cryptography to 46.0.3 or earlier". It reads the
 project's release list from PyPI, which is one more request, and is left out
 when there's no gap, when `WHEELGAP_INDEX_URL` points at another index (which
 may hold private names), or when that lookup fails.
+
+**After 0.11.0.** To check what a package installs as well as the package
+itself, as [`--deps`](cli.md#deps) does, pass `dependencies: true`:
+
+> Can I install mcp 2.3.0 on Windows on ARM?
+
+The tree is resolved for each target from PyPI's metadata, and the result adds
+`dependencies_checked` (how many other packages were checked) and
+`dependency_gaps`: each package in the tree with a gap, with its `results`,
+`gaps` and `via`, the path to it on each gap target, such as
+`{"3.13 win-arm64": ["mcp", "PyJWT", "cryptography"]}`. The other fields stay
+those of the package asked about, except `ok`, which is then true only if
+nothing in the tree has a gap. A tree that only a backtracking resolver could
+settle is an error, as it is on the command line.
 
 ## Protocol versions
 
