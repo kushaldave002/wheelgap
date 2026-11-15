@@ -486,7 +486,6 @@ def _heredoc_rules(syntax: str | None) -> int | None:
     return min(minor, 16) if minor >= 4 or (minor == 3 and m.group(2)) else 0
 
 
-# Docker reads instruction keywords in any case, so `arg` is an ARG too.
 # The names BuildKit gives a value before reading the Dockerfile, from the platforms it builds on and for (and the
 # target stage). A global ARG's default replaces that value, and only `--build-arg` replaces the default: defaultArgs in
 # frontend/dockerfile/dockerfile2llb/platform.go, then buildMetaArgs in convert.go (AddOrReplace), at moby/buildkit
@@ -498,6 +497,7 @@ _AUTOMATIC_ARGS = frozenset(
         "TARGETPLATFORM", "TARGETOS", "TARGETOSVERSION", "TARGETARCH", "TARGETVARIANT", "TARGETSTAGE",
     }
 )  # fmt: skip
+# Docker reads instruction keywords in any case, so `arg` is an ARG too.
 _GLOBAL_ARG_RE = re.compile(r"^(?i:ARG)[\t\v\f\r ]+([A-Za-z_][A-Za-z0-9_]*)(?:=([^ \t\v\f\r]*))?$", re.ASCII)
 _VAR_REF_RE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))", re.ASCII)
 
