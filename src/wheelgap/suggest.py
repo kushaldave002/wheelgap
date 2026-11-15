@@ -95,6 +95,8 @@ class Suggestion:
     loses: tuple[Target, ...] = ()  # gap targets where every newer release with a wheel drops one the row has
     # gap targets no newer release has a wheel for -> the newest older release that has one (of the LOOKBACK newest)
     last: dict[Target, str] = field(default_factory=dict)
+    # targets of `last` whose release has no wheel for one the row has a wheel for (--write-constraints leaves it out)
+    last_loses: tuple[Target, ...] = ()
 
 
 def suggest(releases: dict, pinned: str, targets: Iterable[Target], keep: Iterable[Target] = ()) -> Suggestion:
@@ -127,12 +129,13 @@ def suggest(releases: dict, pinned: str, targets: Iterable[Target], keep: Iterab
             older = _older(releases, pinned) if older is None else older
             if (v := next((v for v in older if _has_wheel(releases, v, t, seen)), None)) is not None:
                 last[t] = v
+    last_loses = tuple(t for t, v in last.items() if not keeps(v))
     if nearest:
         # A release with a wheel for every target that has one at all is no lower than the highest of the nearest.
         for v in candidates[max(nearest.values()) :]:
             if keeps(v) and all(_has_wheel(releases, v, t, seen) for t in nearest):
-                return Suggestion(dict.fromkeys(nearest, v), tuple(loses), last)
-    return Suggestion({t: candidates[i] for t, i in nearest.items()}, tuple(loses), last)
+                return Suggestion(dict.fromkeys(nearest, v), tuple(loses), last, last_loses)
+    return Suggestion({t: candidates[i] for t, i in nearest.items()}, tuple(loses), last, last_loses)
 
 
 Wanted = dict[str, Sequence[tuple[str, Sequence[Target], Sequence[Target]]]]

@@ -412,6 +412,17 @@ def test_last_older_release_only_when_no_newer_one_has_a_wheel():
     assert suggest.suggest(releases, "1.0", [win]) == suggest.Suggestion({win: "1.1"})
 
 
+def test_last_older_release_that_drops_a_kept_wheel_is_marked():
+    linux, win = build_targets(["3.13"], ["linux-x86_64", "win-arm64"])
+    releases = {
+        "1.0": [wheel("1.0", "cp313-cp313-win_arm64")],
+        "2.0": [wheel("2.0", "cp313-cp313-manylinux_2_17_x86_64")],
+    }
+    # --suggest still names 1.0; --write-constraints won't pin it, since 1.0 has no Linux wheel.
+    assert suggest.suggest(releases, "2.0", [win], keep=[linux]) == suggest.Suggestion({}, (), {win: "1.0"}, (win,))
+    assert suggest.suggest(releases, "2.0", [win]).last_loses == ()
+
+
 def test_last_older_release_looks_back_a_bounded_number_of_releases():
     (target,) = build_targets(["3.13"], ["linux-x86_64"])
     releases = {"0.1": [wheel("0.1")]} | {f"1.{i}": [] for i in range(suggest.LOOKBACK)} | {"2.0": []}

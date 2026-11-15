@@ -26,6 +26,7 @@ from .api import running_python
 from .badge import write_badge
 from .build import BuildInfo, describe, lookup_all, requires_for, shown
 from .check import CELL, EXPLAIN_LIMIT, Row, Status, check, explain, explain_lines, marker_holds, reachable
+from .constraints import write_constraints
 from .deps import Resolver, resolve_deps
 from .dockerfile import DockerfileError, read_dockerfile
 from .github import github_annotations
@@ -246,6 +247,12 @@ def make_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="with --explain, also name the nearest newer release with a wheel for each gap's target "
         "(looks the PyPI packages with gaps up on pypi.org)",
+    )
+    p.add_argument(
+        "--write-constraints",
+        metavar="FILE",
+        help="with --suggest, also write a pip/uv constraints file to FILE: one pin per package, to the release "
+        "--suggest names for its gaps, when one release covers them all without losing a wheel elsewhere",
     )
     p.add_argument(
         "--notes",
@@ -1489,6 +1496,8 @@ def _main(argv: list[str]) -> int:
         parser.error("--conda-forge only adds to --explain; pass --explain too")
     if args.suggest and not args.explain:
         parser.error("--suggest only adds to --explain; pass --explain too")
+    if args.write_constraints is not None and not args.suggest:
+        parser.error("--write-constraints writes what --suggest finds; pass --explain --suggest too")
     if args.notes and not args.explain:
         parser.error("--notes only adds to --explain; pass --explain too")
     try:
@@ -1927,6 +1936,20 @@ def _main(argv: list[str]) -> int:
         except OSError as e:
             print(f"wheelgap: error: {e}", file=sys.stderr)
             return input_error_json(e) if args.json else 2
+
+    if args.write_constraints is not None and suggestions is not None:  # an empty FILE is an error, as for --junit
+        try:
+            pins = write_constraints(args.write_constraints, rows, targets, suggestions)
+        except OSError as e:
+            print(f"wheelgap: error: {e}", file=sys.stderr)
+            return input_error_json(e) if args.json else 2
+        if not quiet:
+            note = (
+                f"wheelgap: note: wrote {pins} pin{'s' * (pins != 1)} to {args.write_constraints}, not checked against "
+                f"the rest of the dependency tree: check with `pip install -c {args.write_constraints} ...` "
+                f"or `uv pip compile -c {args.write_constraints} ...`"
+            )
+            print(Style(use_color(args.color)).dim(note), file=sys.stderr)
 
     if args.github_annotations:
         # Workflow commands work on stdout and stderr alike; stderr keeps --json and --markdown output clean.

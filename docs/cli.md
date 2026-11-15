@@ -242,6 +242,23 @@ summary or the exit code. A run with `--index-url` or `WHEELGAP_INDEX_URL` looks
 flag. With `--markdown`, it renders suggestions as a Markdown list under the explanation. With `--json`, adds `suggest` to each package with a gap. See
 [Newer releases](output.md#suggest).
 
+### `--write-constraints` {#write-constraints}
+
+**After 0.11.0.** `--write-constraints FILE` (with `--explain --suggest`): also write what `--suggest` found to a
+pip/uv constraints file, one pin per package:
+
+```text
+cryptography==46.0.3  # wheels for win-arm64; 50.0.2 has none
+```
+
+A package gets a pin only when a single release has wheels for every gap target `--suggest` named a release for, and
+it keeps every wheel the checked release has: a newer one as `--suggest` names it, or the last older one that had a
+wheel. A package whose gaps need different releases, or whose only release with a wheel for a target drops one
+elsewhere, is left out with a comment saying why, and so is a version range that resolved to different releases on
+different Pythons. The file isn't checked against the rest of the dependency tree, so check that it still resolves:
+`pip install -c FILE -r requirements.txt` or `uv pip compile -c FILE requirements.in`. It's written even when the check
+fails; an empty `FILE` is an error, as for `--junit`.
+
 ### `-q`, `--quiet`, `--no-quiet` {#quiet}
 
 Print only the gap summary and the affected package names. Clean runs without ignored packages are silent, and JSON
