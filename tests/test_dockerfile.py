@@ -232,6 +232,37 @@ def test_base_stage_global_arg_default_is_used(tmp_path):
     assert image.build_args == (("PY", "3.12"),)
 
 
+AUTOMATIC = [
+    "BUILDPLATFORM", "BUILDOS", "BUILDOSVERSION", "BUILDARCH", "BUILDVARIANT",
+    "TARGETPLATFORM", "TARGETOS", "TARGETOSVERSION", "TARGETARCH", "TARGETVARIANT", "TARGETSTAGE",
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("name", AUTOMATIC)
+def test_automatic_platform_arg_with_a_default_uses_the_default(tmp_path, name):
+    # BuildKit sets these from the platforms, then a global ARG's default replaces its value (#332).
+    path = tmp_path / "Dockerfile"
+    path.write_text(f"ARG {name}=3.12\nFROM python:${{{name}}}-slim\n", encoding="utf-8")
+    image = read_dockerfile(path)
+    assert image == ImageTarget("3.12", "linux-x86_64", glibc="2.41")
+    assert image.build_args == ((name, "3.12"),)
+
+
+def test_automatic_targetarch_default_picks_the_platform(tmp_path):
+    path = tmp_path / "Dockerfile"
+    path.write_text("ARG TARGETARCH=arm64\nFROM --platform=linux/${TARGETARCH} python:3.13-slim\n", encoding="utf-8")
+    assert read_dockerfile(path) == ImageTarget("3.13", "linux-aarch64", glibc="2.41")
+
+
+@pytest.mark.parametrize("name", AUTOMATIC)
+def test_automatic_platform_arg_without_a_default_is_set_by_the_build(tmp_path, name):
+    # With no default, the ARG keeps the value BuildKit set for the build, which wheelgap can't know.
+    path = tmp_path / "Dockerfile"
+    path.write_text(f"ARG {name}\nFROM --platform=${name} python:3.13\n", encoding="utf-8")
+    with pytest.raises(DockerfileError, match=f": ARG {name} has no default: {name} is set by the build, pass -p/-t"):
+        read_dockerfile(path)
+
+
 def test_read_dockerfile_expands_a_global_arg_default_in_platform(tmp_path):
     path = tmp_path / "Dockerfile"
     path.write_text("ARG ARCH=linux/arm64\nFROM --platform=${ARCH} python:3.13-alpine AS runtime\n", encoding="utf-8")

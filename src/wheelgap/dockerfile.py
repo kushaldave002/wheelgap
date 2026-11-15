@@ -487,6 +487,17 @@ def _heredoc_rules(syntax: str | None) -> int | None:
 
 
 # Docker reads instruction keywords in any case, so `arg` is an ARG too.
+# The names BuildKit gives a value before reading the Dockerfile, from the platforms it builds on and for (and the
+# target stage). A global ARG's default replaces that value, and only `--build-arg` replaces the default: defaultArgs in
+# frontend/dockerfile/dockerfile2llb/platform.go, then buildMetaArgs in convert.go (AddOrReplace), at moby/buildkit
+# 38b0e2ab2e9bc5fd3f622759ac92ad4b649f3bf4. So a default is used as for any other ARG, and with none the value is
+# the build's own.
+_AUTOMATIC_ARGS = frozenset(
+    {
+        "BUILDPLATFORM", "BUILDOS", "BUILDOSVERSION", "BUILDARCH", "BUILDVARIANT",
+        "TARGETPLATFORM", "TARGETOS", "TARGETOSVERSION", "TARGETARCH", "TARGETVARIANT", "TARGETSTAGE",
+    }
+)  # fmt: skip
 _GLOBAL_ARG_RE = re.compile(r"^(?i:ARG)[\t\v\f\r ]+([A-Za-z_][A-Za-z0-9_]*)(?:=([^ \t\v\f\r]*))?$", re.ASCII)
 _VAR_REF_RE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))", re.ASCII)
 
@@ -531,7 +542,9 @@ def _global_arg_defaults(instructions: list[tuple[str, bool]]) -> _GlobalArgs:
         # A later declaration of the same name replaces the earlier one, as in Docker.
         args.defaults.pop(name, None)
         args.problems.pop(name, None)
-        if value is None:
+        if value is None and name in _AUTOMATIC_ARGS:
+            args.problems[name] = f"ARG {name} has no default: {name} is set by the build, pass -p/-t instead"
+        elif value is None:
             args.problems[name] = f"ARG {name} has no default: a --build-arg value isn't read, pass -p/-t instead"
         elif value == "":
             args.problems[name] = f"ARG {name} has an empty default, pass -p/-t instead"
