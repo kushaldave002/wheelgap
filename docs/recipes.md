@@ -148,8 +148,9 @@ winonly
 ```
 
 This reports wheel availability, not whether a package is safe to use without
-the GIL. A package listed because its result is `unknown` couldn't be looked up;
-its `error` field in the JSON says why.
+the GIL — see [Wheels on free-threaded Python](free-threading.md). A package
+listed because its result is `unknown` couldn't be looked up; its `error`
+field in the JSON says why.
 
 ## Monorepos with separate lockfiles
 
