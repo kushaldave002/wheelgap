@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- MCP: `check_package` now returns `last_with_wheel`, as `--explain --suggest --json` does: for each gap target no newer release has a wheel for, the newest older release that has one, so an agent can say which version to pin. (#373, thanks [@kushaldave002](https://github.com/kushaldave002))
+
 ## 0.11.0 (2026-11-15)
 
 New: **`--deps`** checks everything that package names on the command line install, resolved for each target from PyPI's metadata, with the path to each gap: `wheelgap mcp==2.3.0 --deps -t win-arm64 --explain` finds that cryptography builds from source there, `via: mcp → PyJWT → cryptography`. And when no newer release has a wheel for a gap, **`--explain --suggest`** now names the last older one that did (`the last one that did is 46.0.3`). `--explain --notes` also shows the [coverage tracker](https://wheelgap.github.io/tracker/)'s build lab results; uv.lock inputs follow `[tool.uv]` `no-build` and `no-binary` and match top-level requirements by their source; and the MCP server's `check_lockfile` takes a pixi `environment`, while `check_dockerfile` reports the `build_args` it used.
