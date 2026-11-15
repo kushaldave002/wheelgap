@@ -1410,7 +1410,10 @@ def _main(argv: list[str]) -> int:
         docker_musl = False
         if args.dockerfile:
             # The image beats pyproject.toml; flags still win.
-            image = read_dockerfile(Path(args.dockerfile))
+            docker_notes: list[str] = []
+            image = read_dockerfile(Path(args.dockerfile), docker_notes)
+            for note in docker_notes:
+                print(f"wheelgap: note: {note}", file=sys.stderr)
             docker_musl = image.platform.startswith("musl-")
             if docker_musl and args.target:
                 args.target = [musl_docker_names(item) for item in args.target]

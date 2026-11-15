@@ -390,10 +390,21 @@ def test_multi_stage_dockerfile(tmp_path):
 
 
 def test_dockerfile_it_cant_read(tmp_path):
-    (tmp_path / "Dockerfile").write_text("ARG BASE=python:3.13\nFROM $BASE\n")
+    (tmp_path / "Dockerfile").write_text("ARG BASE\nFROM $BASE\n", encoding="utf-8")
     found = suggest(tmp_path)
     assert found.targets == []
-    assert unreadable(found) == [("Dockerfile", None, "$BASE: build arguments are not supported")]
+    assert unreadable(found) == [
+        ("Dockerfile", None, "ARG BASE: needs a plain global default without quotes, dollars or escapes")
+    ]
+
+
+def test_dockerfile_global_default_is_suggested(tmp_path):
+    (tmp_path / "Dockerfile").write_text("ARG BASE=python:3.13\nFROM $BASE\n", encoding="utf-8")
+    found = suggest(tmp_path)
+    assert where(found.pythons) == [("3.13", "Dockerfile", 2)]
+    assert where(found.targets) == [("linux-x86_64", "Dockerfile", 2)]
+    assert found.pythons[0].source == "FROM python:3.13"
+    assert found.unreadable == []
 
 
 def test_glibc_is_left_out_when_the_sources_disagree(tmp_path, capsys):

@@ -61,7 +61,10 @@ wheelgap pixi.lock --environment test -p 3.13 -t linux-x86_64,macos-arm64
 wheelgap psycopg2 uvloop numpy==2.3.4 -t windows,win-arm64
 
 # Take the Python and platform from the final stage of a Dockerfile
+# Global ARG defaults are supported: ARG PYTHON_VERSION=3.12 / FROM python:${PYTHON_VERSION}-slim
 wheelgap --dockerfile Dockerfile
+# For a build using --build-arg PYTHON_VERSION=3.13, override the default
+wheelgap --dockerfile Dockerfile -p 3.13
 
 # Machine-readable, for scripts and CI
 wheelgap --json > wheelgap.json

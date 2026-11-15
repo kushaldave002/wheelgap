@@ -773,3 +773,61 @@ def test_dockerfile_that_is_not_utf8_is_a_clear_error(tmp_path):
     path.write_bytes(b"FROM --platform=linux/arm64\xa0python:3.13\n")  # cp1252: Docker would read 0xa0 as a space
     with pytest.raises(DockerfileError, match="not UTF-8 \\(byte 0xa0 at offset 27\\), pass -p/-t instead"):
         read_dockerfile(path)
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("ARG PY=3.12\nFROM python:${PY}-slim\n", ImageTarget("3.12", "linux-x86_64", glibc="2.41")),
+        (
+            "ARG ARCH=linux/arm64\nFROM --platform=${ARCH} python:3.13-alpine\n",
+            ImageTarget("3.13", "musl-aarch64", musl="1.2"),
+        ),
+        (
+            "ARG PY=3.11\nARG PY=3.12\nARG PY\nFROM python:$PY AS base\nARG PY=3.13\nFROM base\n",
+            ImageTarget("3.12", "linux-x86_64", glibc="2.41"),
+        ),
+        (
+            "ARG PY=3.\\\n12\nFROM python:$PY AS base\nRUN <<EOF\nARG PY=3.13\nEOF\nFROM python:$PY\n",
+            ImageTarget("3.12", "linux-x86_64", glibc="2.41"),
+        ),
+    ],
+)
+def test_global_arg_defaults(tmp_path, text, expected):
+    path = tmp_path / "Dockerfile"
+    path.write_text(text, encoding="utf-8")
+    assert read_dockerfile(path) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ARG PY\nFROM python:$PY\n",
+        "FROM python:$PY\n",
+        'ARG PY="3.12"\nFROM python:$PY\n',
+        "ARG PY='3.12'\nFROM python:$PY\n",
+        "ARG PY=$OTHER\nFROM python:$PY\n",
+        "ARG PY=3.12\\-slim\nFROM python:$PY\n",
+        "ARG PY=3.12`-slim\nFROM python:$PY\n",
+        "ARG PY=3.12\nFROM python:${PY:-3.13}\n",
+        "FROM --platform=$BUILDPLATFORM python:3.12\n",
+        "FROM python:3.11\nARG PY=3.12\nFROM python:$PY\n",
+        "ARG PY=3.12\nFROM python:3.12 AS $PY\n",
+    ],
+)
+def test_unsupported_arg_expansion(tmp_path, text):
+    path = tmp_path / "Dockerfile"
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(DockerfileError, match="pass -p/-t|invalid stage name"):
+        read_dockerfile(path)
+
+
+def test_cli_arg_default_note_and_python_override(capsys, fixtures, tmp_path, fake_pypi):
+    path = tmp_path / "Dockerfile"
+    path.write_text("ARG PYTHON_VERSION=3.12\nFROM python:${PYTHON_VERSION}-slim\n", encoding="utf-8")
+    main([str(fixtures / "uvproj"), "--dockerfile", str(path), "-p", "3.13", "--json"])
+    captured = capsys.readouterr()
+    assert "PYTHON_VERSION=3.12" in captured.err
+    assert "-p" in captured.err and "--build-arg" in captured.err
+    assert "PYTHON_VERSION" not in captured.out
+    assert [target["python"] for target in json.loads(captured.out)["targets"]] == ["3.13"]

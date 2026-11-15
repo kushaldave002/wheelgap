@@ -489,7 +489,7 @@ def _from_lines(text: str) -> list[str]:
     return [args for _, args in _from_instructions(text)]
 
 
-def _from_instructions(text: str) -> list[tuple[int, str]]:
+def _from_instructions(text: str, notes: list[str] | None = None) -> list[tuple[int, str]]:
     """(line number, arguments) of every FROM instruction in order, the line being where the instruction starts.
 
     Heredoc bodies (`RUN <<EOF` ... `EOF`) are skipped, so a line in one is never read as an instruction.
@@ -511,6 +511,7 @@ def _from_instructions(text: str) -> list[tuple[int, str]]:
     esc = re.escape(escape)
     continued = re.compile(rf"(?<!{esc}){esc}[ \t]*$")  # one escape char at the end, not two
     found: list[tuple[int, str]] = []
+    defaults: dict[str, str] = {}
     parts: list[str] = []  # an instruction continued onto the next line
     start = 0  # the line the instruction being read starts on
     heredocs: deque[tuple[str, bool]] = deque()  # (delimiter, strip_tabs) of the bodies still to skip, in order
@@ -529,10 +530,20 @@ def _from_instructions(text: str) -> list[tuple[int, str]]:
             )
         if joined and words and words[0].upper().startswith("FROM") and words[0].upper() != "FROM":
             raise DockerfileError(f"unknown instruction {words[0]!r} (a FROM joined to the next line?)")
+        if words[0].upper() == "ARG" and not found and len(words) == 2:
+            name, equal, value = words[1].partition("=")
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) and equal:
+                defaults[name] = value
         if words and words[0].upper() == "FROM":
             if len(words) == 1:
                 raise DockerfileError("FROM with no image")
-            found.append((line_number, words[1]))
+            args = words[1]
+            if "$" in args:
+                image, platform, stage = _split_from(args)
+                image = _expand_args(image, defaults, notes)
+                platform = _expand_args(platform, defaults, notes) if platform else None
+                args = f"{f'--platform={platform} ' if platform else ''}{image}{f' AS {stage}' if stage else ''}"
+            found.append((line_number, args))
 
     def heredocs_in(instruction: str) -> deque[tuple[str, bool]]:
         docs = deque(_heredocs(instruction, escape))
@@ -582,6 +593,30 @@ def _from_instructions(text: str) -> list[tuple[int, str]]:
     if heredocs:
         raise DockerfileError(f"unterminated heredoc <<{heredocs[0][0]} (BuildKit rejects it)")
     return found
+
+
+def _expand_args(value: str, defaults: dict[str, str], notes: list[str] | None) -> str:
+    # BuildKit expands base names/platforms with global args, not stage args (buildMetaArgs/dispatch).
+    # https://github.com/moby/buildkit/blob/cedaeca8850a2bb536bbd1db72419f3cf491bdb5/frontend/dockerfile/dockerfile2llb/convert.go
+    def replace(match: re.Match[str]) -> str:
+        name = match[1] or match[2]
+        default = defaults.get(name)
+        automatic = {
+            f"{prefix}{suffix}" for prefix in ("BUILD", "TARGET") for suffix in ("PLATFORM", "OS", "ARCH", "VARIANT")
+        }
+        if name in automatic or default is None or re.search(r"[\s\"'$\\`]", default):
+            raise DockerfileError(
+                f"ARG {name}: needs a plain global default without quotes, dollars or escapes, pass -p/-t instead"
+            )
+        note = f"using ARG default {name}={default}; -p/-t override Python/platform for builds with --build-arg"
+        if notes is not None and note not in notes:
+            notes.append(note)
+        return default
+
+    expanded = re.sub(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))", replace, value)
+    if "$" in expanded:
+        raise DockerfileError(f"{value}: only $NAME and ${{NAME}} global defaults are supported, pass -p/-t instead")
+    return expanded
 
 
 def last_from(text: str) -> str:
@@ -653,21 +688,21 @@ def parse_from(args: str) -> ImageTarget:
     return parse_image(image, platform)
 
 
-def final_image(text: str) -> tuple[str, str | None]:
+def final_image(text: str, notes: list[str] | None = None) -> tuple[str, str | None]:
     """The image the last stage is built on, and its platform.
 
     `FROM base AS runtime` builds on an earlier stage called `base`; that is followed back (through
     any chain of stages) to a real image. Like Docker, a stage keeps the platform of the stage it
     builds on: a `--platform` on `FROM base` doesn't change what `base` was built for.
     """
-    image, platform, _ = final_from(text)
+    image, platform, _ = final_from(text, notes)
     return image, platform
 
 
-def final_from(text: str) -> tuple[str, str | None, int]:
+def final_from(text: str, notes: list[str] | None = None) -> tuple[str, str | None, int]:
     """final_image, plus the line of the FROM instruction that names that image."""
     stages: dict[str, tuple[str, str | None, int]] = {}
-    lines = _from_instructions(text)
+    lines = _from_instructions(text, notes)
     if not lines:
         raise DockerfileError("no FROM line found")
     for number, args in lines[:-1]:
@@ -774,13 +809,13 @@ def parse_image(image: str, platform: str | None = None) -> ImageTarget:
     return ImageTarget(python, f"{family}-{arch}", glibc, musl)
 
 
-def read_dockerfile(path: Path) -> ImageTarget:
+def read_dockerfile(path: Path, notes: list[str] | None = None) -> ImageTarget:
     try:
         text = path.read_bytes().decode("utf-8-sig")
     except UnicodeDecodeError as e:
         byte = f"0x{e.object[e.start]:02x}"
         raise DockerfileError(f"{path}: not UTF-8 (byte {byte} at offset {e.start}), pass -p/-t instead") from None
     try:
-        return parse_image(*final_image(text))
+        return parse_image(*final_image(text, notes))
     except DockerfileError as e:
         raise DockerfileError(f"{path}: {e}") from None
