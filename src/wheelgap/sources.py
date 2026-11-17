@@ -1485,6 +1485,18 @@ def parse_requirements(path: Path) -> Source:
         req_lines=req_lines,
         compiler_signs=compiler_signs,
     )
+    return _finalize_requirements(path, pkgs, constraints, index_options, format_control, req_lines, compiler_signs)
+
+
+def _finalize_requirements(
+    path: Path,
+    pkgs: list[Package],
+    constraints: list[Package],
+    index_options: list[str],
+    format_control: _FormatControl,
+    req_lines: list[str],
+    compiler_signs: list[str],
+) -> Source:
     by_name: dict[str, list[Package]] = {}
     for entry in constraints:
         by_name.setdefault(entry.key, []).append(entry)
@@ -1554,6 +1566,7 @@ def _read_requirements(
     req_lines: list[str] | None = None,
     compiler_signs: list[str] | None = None,
     stack: dict[bool, set[Path]] | None = None,
+    raw_lines: list[str] | None = None,
 ) -> list[Package]:
     """`index_options` collects the lines that may point pip at another index: index options (--index-url,
     --extra-index-url, --find-links, --no-index), includes that aren't read, and abbreviated include options.
@@ -1571,7 +1584,7 @@ def _read_requirements(
     try:
         append = constraints.append if constraint else pkgs.append
         # utf-8-sig: a byte order mark (Windows editors) mustn't hide an option on the first line.
-        lines = _join_continued_lines(path.read_text(encoding="utf-8-sig"))
+        lines = raw_lines if raw_lines is not None else _join_continued_lines(path.read_text(encoding="utf-8-sig"))
         for raw in lines:
             if compiler_signs is not None and _VIA_COMMENT_RE.match(raw.lstrip()):
                 compiler_signs.append("via")  # pip-compile writes "# via <name>" comment lines
@@ -2160,6 +2173,72 @@ def check_report_targets(source: Source, targets: Iterable[Target]) -> None:
         )
 
 
+def _conda_package_name(spec: str) -> str:
+    """The package name from a conda MatchSpec like `python=3.12` or `conda-forge::numpy>=1.26`."""
+    tail = spec.split("::", 1)[-1].strip()
+    return re.split(r"[\s=<>!~\[]", tail, maxsplit=1)[0].strip() or spec
+
+
+def parse_conda_env(path: Path) -> Source:
+    """A conda environment.yml / environment.yaml: its `pip:` list read as a requirements file, and its conda
+    dependencies listed as skipped (`conda`)."""
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as e:
+        raise SourceError(f"{path.name}: not valid UTF-8 (byte {e.start}), so it can't be read for sure") from None
+    try:
+        doc = _BlockYaml(text).read()
+    except _YamlError as e:
+        raise SourceError(f"{path.name}: {e}") from None
+    if not isinstance(doc, dict):
+        raise SourceError(f"{path.name}: expected a YAML mapping")
+    raw_deps = doc.get("dependencies")
+    if raw_deps is None:
+        raw_deps = []
+    if not isinstance(raw_deps, list):
+        raise SourceError(f"{path.name}: `dependencies` must be a list")
+
+    conda_skips: list[Package] = []
+    pip_lines: list[str] = []
+    for entry in raw_deps:
+        if isinstance(entry, str):
+            conda_skips.append(Package(_conda_package_name(entry), None, skip="conda", origin=path.name))
+        elif isinstance(entry, dict):
+            if list(entry.keys()) != ["pip"]:
+                keys = ", ".join(str(k) for k in entry)
+                raise SourceError(f"{path.name}: unsupported mapping in `dependencies` ({keys})")
+            pip_list = entry["pip"]
+            if pip_list is None:
+                continue
+            if not isinstance(pip_list, list):
+                raise SourceError(f"{path.name}: `pip` dependencies must be a list")
+            for item in pip_list:
+                if not isinstance(item, str):
+                    raise SourceError(f"{path.name}: `pip` dependency entries must be strings")
+                pip_lines.append(item)
+        else:
+            raise SourceError(f"{path.name}: unsupported entry in `dependencies`")
+
+    constraints: list[Package] = []
+    seen: dict[bool, set[Path]] = {False: set(), True: set()}
+    index_options: list[str] = []
+    format_control = _FormatControl()
+    req_lines: list[str] = []
+    compiler_signs: list[str] = []
+    pkgs = _read_requirements(
+        path,
+        seen,
+        constraints,
+        index_options=index_options,
+        format_control=format_control,
+        req_lines=req_lines,
+        compiler_signs=compiler_signs,
+        raw_lines=pip_lines,
+    )
+    pkgs.extend(conda_skips)
+    return _finalize_requirements(path, pkgs, constraints, index_options, format_control, req_lines, compiler_signs)
+
+
 READERS = {
     "pyproject": parse_pyproject,
     "uv": parse_uv_lock,
@@ -2170,6 +2249,7 @@ READERS = {
     "requirements": parse_requirements,
     "pip-report": parse_pip_report,
     "pixi": parse_pixi_lock,
+    "conda-env": parse_conda_env,
 }
 PARSERS = {
     "uv.lock": "uv",
@@ -2207,6 +2287,8 @@ def file_kind(path: Path) -> str:
     name = path.name
     if name == "pyproject.toml":
         return "pyproject"
+    if name in ("environment.yml", "environment.yaml"):
+        return "conda-env"
     if name in PARSERS:
         return PARSERS[name]
     if name.startswith("pylock.") and name.endswith(".toml"):
@@ -2222,7 +2304,7 @@ def file_kind(path: Path) -> str:
     raise SourceError(
         f"don't know how to read {path} "
         "(expected uv.lock, pylock.toml, poetry.lock, pdm.lock, Pipfile.lock, pixi.lock, requirements.lock, "
-        "requirements.txt, pip report.json or pyproject.toml)"
+        "requirements.txt, pip report.json, environment.yml or pyproject.toml)"
     )
 
 
@@ -2298,7 +2380,7 @@ def load_inputs(inputs: list[str], environment: str | None = None) -> list[Sourc
                 sources[-1].passed_over = p / "pixi.lock"
         elif p.is_file():
             sources.append(load_file(p, environment))
-        elif "/" in item or item.endswith((".lock", ".txt", ".toml", ".json")):
+        elif "/" in item or item.endswith((".lock", ".txt", ".toml", ".json", ".yml", ".yaml")):
             raise SourceError(f"{item}: no such file")
         else:
             adhoc.packages.append(requirement_to_package(item, "command line"))
