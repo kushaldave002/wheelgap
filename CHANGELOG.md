@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `wheelgap diff` uses project Python, target and platform-version defaults beside the new input, with command-line overrides.
+- `wheelgap diff` uses project Python, target and platform-version defaults beside the new input, with command-line overrides. (#507, thanks [@kushaldave002](https://github.com/kushaldave002))
 
 - A missing `*.in` requirements file now reports `no such file` instead of treating its name as a PyPI package; input docs also list pip JSON reports. (#497, thanks [@AdityaSreevatsaK](https://github.com/AdityaSreevatsaK))
 - `--fix --print-gap-wheel-snippet` prints only the configuration that installs the gap wheels, for you to copy: the `--extra-index-url` line for one requirements file or package names, or the `pyproject.toml` entries for one uv.lock, with comments that say the wheels are unofficial and what each fills. It never writes a file, and keeps the check's exit code. Other inputs and more than one input are refused with exit code 2 before anything is looked up. (#481, thanks [@AdityaSreevatsaK](https://github.com/AdityaSreevatsaK))
