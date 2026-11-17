@@ -708,3 +708,93 @@ def test_diff_uv_lock_new_transitive_gap_names_its_direct_owner(fake_pypi, tmp_p
     assert report["new"][0]["direct"] == {"linux-x86_64": ["purewheel"]}
     assert main([str(old_dir), str(new_dir), *TARGET]) == 1
     assert "NoWheels (via purewheel) 0.9 (new)" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "config, flags, expected",
+    [
+        ('python = ["3.13"]\ntargets = ["linux-aarch64"]', [], [("3.13", "linux-aarch64")]),
+        ('python = ["3.13"]\ntargets = ["linux-aarch64"]', ["-t", "win-amd64"], [("3.13", "win-amd64")]),
+        ('python = ["3.13"]\ntargets = ["linux-aarch64"]', ["-p", "3.14"], [("3.14", "linux-aarch64")]),
+    ],
+)
+def test_diff_uses_new_project_defaults(fake_pypi, tmp_path, capsys, config, flags, expected):
+    old, new = write_pair(tmp_path, "purewheel==3.1\n", "purewheel==3.1\n")
+    (tmp_path / "new" / "pyproject.toml").write_text("[tool.wheelgap]\n" + config, encoding="utf-8")
+    (tmp_path / "old" / "pyproject.toml").write_text('[tool.wheelgap]\npython = ["3.12"]', encoding="utf-8")
+    assert main([old, new, *flags, "--json"]) == 0
+    targets = json.loads(capsys.readouterr().out)["targets"]
+    assert [(t["python"], t["platform"]) for t in targets] == expected
+
+
+def test_diff_reads_new_project_python_version(fake_pypi, tmp_path, capsys):
+    old, new = write_pair(tmp_path, "purewheel==3.1\n", "purewheel==3.1\n")
+    (tmp_path / "new" / ".python-version").write_text("3.13.1\n", encoding="utf-8")
+    assert main([old, new, "-t", "win-amd64", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["targets"][0]["python"] == "3.13"
+
+
+def test_diff_rejects_malformed_project_config(fake_pypi, tmp_path, capsys):
+    old, new = write_pair(tmp_path, "purewheel==3.1\n", "purewheel==3.1\n")
+    (tmp_path / "new" / "pyproject.toml").write_text("[tool.wheelgap]\ntargets = 12", encoding="utf-8")
+    assert main([old, new, *TARGET, "--json"]) == 2
+    out, err = capsys.readouterr()
+    assert "targets must be a list of strings" in err
+    assert json.loads(out)["error"]["type"] == "SourceError"
+
+
+@pytest.mark.parametrize(
+    "config, flags, pair, expected_code",
+    [
+        ('glibc = "2.28"', [], NEW_GLIBC_PAIR, 1),
+        ('glibc = "2.28"', ["--glibc", "2.36"], NEW_GLIBC_PAIR, 0),
+        ('glibc = "2.36"', ["--distro", "rhel-8"], NEW_GLIBC_PAIR, 1),
+        ('distro = "rhel-8"', ["--glibc", "2.36"], NEW_GLIBC_PAIR, 0),
+        ('musl = "1.1"', ["-t", "musl-x86_64"], ("musllag==1.0\n", "musllag==1.1\n"), 1),
+        ('macos = "13.0"', ["-t", "macos-arm64"], ("maclag==1.0\n", "maclag==1.1\n"), 1),
+    ],
+)
+def test_diff_project_platform_floors(fake_pypi, tmp_path, capsys, config, flags, pair, expected_code):
+    old, new = write_pair(tmp_path, *pair)
+    (tmp_path / "new" / "pyproject.toml").write_text("[tool.wheelgap]\n" + config, encoding="utf-8")
+    assert main([old, new, *TARGET, *flags]) == expected_code
+
+
+def test_diff_uses_uv_required_environments(fake_pypi, tmp_path, capsys):
+    old, new = write_pair(tmp_path, "purewheel==3.1\n", "purewheel==3.1\n")
+    (tmp_path / "new" / "pyproject.toml").write_text(
+        "[tool.uv]\nrequired-environments = [\"sys_platform == 'win32' and platform_machine == 'ARM64'\"]",
+        encoding="utf-8",
+    )
+    assert main([old, new, "-p", "3.13", "--json"]) == 0
+    assert [t["platform"] for t in json.loads(capsys.readouterr().out)["targets"]] == ["win-arm64"]
+
+
+@needs_git
+def test_diff_git_ref_uses_working_tree_config(fake_pypi, repo, capsys):
+    config = repo / "pyproject.toml"
+    config.write_text('[tool.wheelgap]\npython = ["3.12"]\ntargets = ["linux-x86_64"]', encoding="utf-8")
+    git("add", "pyproject.toml", cwd=repo)
+    git("commit", "-q", "-m", "old config", cwd=repo)
+    config.write_text('[tool.wheelgap]\npython = ["3.13"]\ntargets = ["win-arm64"]', encoding="utf-8")
+    assert main(["HEAD:uv.lock", "HEAD:uv.lock", "--json"]) == 0
+    assert [(t["python"], t["platform"]) for t in json.loads(capsys.readouterr().out)["targets"]] == [
+        ("3.13", "win-arm64")
+    ]
+
+
+@needs_git
+def test_diff_git_ref_config_when_lockfile_is_absent_from_working_tree(fake_pypi, repo, capsys):
+    folder = repo / "project"
+    folder.mkdir()
+    (folder / "uv.lock").write_text(UV_OLD, encoding="utf-8")
+    git("add", "project/uv.lock", cwd=repo)
+    git("commit", "-q", "-m", "nested lock", cwd=repo)
+    (folder / "uv.lock").unlink()
+    (folder / "pyproject.toml").write_text(
+        '[tool.wheelgap]\npython = ["3.13"]\ntargets = ["win-arm64"]\nignore = ["purewheel"]', encoding="utf-8"
+    )
+    assert main(["HEAD:project/uv.lock", "HEAD:project/uv.lock", "--json"]) == 0
+    assert [(t["python"], t["platform"]) for t in json.loads(capsys.readouterr().out)["targets"]] == [
+        ("3.13", "win-arm64")
+    ]

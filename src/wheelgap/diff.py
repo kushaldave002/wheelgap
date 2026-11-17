@@ -47,7 +47,7 @@ from .api import Result, _check_lockfile, check_packages, make_targets
 from .check import CELL, Row, Status, applies, reachable
 from .logsafe import guarded_output
 from .sources import Source, SourceError
-from .targets import DEFAULT_GLIBC, DEFAULT_MACOS, DEFAULT_MUSL, Target, next_python_note, resolve_distro
+from .targets import DEFAULT_GLIBC, DEFAULT_MACOS, DEFAULT_MUSL, Target, next_python_note
 
 # Higher is worse. UNKNOWN only orders entries of the same package on one target (see the module docstring).
 RANK = {
@@ -428,22 +428,34 @@ def _main(argv: list[str] | None, prog: str) -> int:
     )
     args = p.parse_args(argv)
     try:
-        # Match cli.py precedence: explicit --glibc / --musl wins over --distro.
-        glibc, musl = DEFAULT_GLIBC, DEFAULT_MUSL
-        if args.distro is not None:
-            key, version = resolve_distro(args.distro)
-            if key == "glibc":
-                glibc = version
-            else:
-                musl = version
-        if args.glibc is not None:
-            glibc = args.glibc
-        if args.musl is not None:
-            musl = args.musl
-        targets = make_targets(
-            args.python or None, args.target or None, glibc=glibc, musl=musl, macos=args.macos or DEFAULT_MACOS
+        # Import lazily: cli dispatches to diff, and owns the shared project-default helpers.
+        from .cli import (
+            find_pyproject,
+            libc_versions,
+            load_config,
+            load_uv_targets,
+            project_dir,
+            read_python_version,
+            running_python,
         )
-        if note := next_python_note(args.python):
+
+        ref = git_ref_input(args.new)
+        inputs = [str(Path(ref[1]).parent) if ref is not None else args.new]
+        pyproject = find_pyproject(inputs)
+        config = load_config(pyproject) if pyproject else {}
+        glibc, musl = libc_versions(args, config)
+        pythons = args.python or config.get("python") or read_python_version(project_dir(inputs))
+        platforms = args.target or config.get("targets", [])
+        if not platforms and pyproject:
+            platforms = load_uv_targets(pyproject, pythons or [running_python()])
+        targets = make_targets(
+            pythons or None,
+            platforms or None,
+            glibc=glibc,
+            musl=musl,
+            macos=args.macos or config.get("macos", DEFAULT_MACOS),
+        )
+        if note := next_python_note(pythons):
             print(f"wheelgap: note: {note}", file=sys.stderr)
         sides = []
         sources = []
