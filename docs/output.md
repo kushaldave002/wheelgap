@@ -1,7 +1,8 @@
 # Output
 
 wheelgap prints a table by default, or JSON (`--json`) or Markdown (`--markdown`) instead, and can also write a JUnit
-XML file (`--junit PATH`) or a SARIF file (`--sarif PATH`). Notes and errors go to stderr, so the stdout of `--json`
+XML file (`--junit PATH`), a SARIF file (`--sarif PATH`) or a GitLab Code Quality report
+(`--gitlab-code-quality PATH`). Notes and errors go to stderr, so the stdout of `--json`
 and `--markdown` holds only the report.
 
 ## Exit codes
@@ -554,3 +555,18 @@ another SARIF viewer), alongside whatever output mode you use. It has two rules,
 - `partialFingerprints` key a result by file, package and target, not version, so code scanning keeps one alert open
   across lockfile bumps until the gap goes away. A package that one file locks at several versions gets an alert per
   version.
+
+## GitLab Code Quality {#gitlab-code-quality}
+
+`--gitlab-code-quality PATH` writes a [GitLab Code Quality report](https://docs.gitlab.com/ci/testing/code_quality/#code-quality-report-format)
+as a JSON array, alongside the usual output and even when the check fails. Each finding names one package and gap
+target, with check name `wheelgap/source` or `wheelgap/missing` and a stable SHA-256 fingerprint of the canonical
+package name, version and target (including Python). Changing report order or adding another Python does not change
+an existing finding's fingerprint.
+
+Severity is `critical` for `missing`, `major` for `source`, `minor` for a source build `--fail-on missing` accepts,
+and `info` on an `--advisory` target. Ignored gaps and `unknown` cells have no finding; failed lookups still fail the
+job. Locations use the same package lines as SARIF, relative to `CI_PROJECT_DIR` (else the current directory), with
+forward slashes. If the reader knows the file but not the package's line, the finding uses line 1. GitLab requires
+a file and line: packages named on the command line and files outside the repository are omitted from this report,
+while their gaps still appear in normal output and affect the exit code. No gaps means an empty array (`[]`).

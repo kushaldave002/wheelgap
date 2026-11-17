@@ -228,6 +228,23 @@ start both a branch and a merge request pipeline, each running the job; see
 `when: always` keeps the report when the job fails, which is when you want it. See [JUnit XML](output.md#junit-xml)
 for how cells map to test results.
 
+For findings on the lockfile's lines in GitLab merge requests, publish a Code Quality report instead (or alongside
+JUnit):
+
+```yaml
+wheelgap:
+  image: ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+  script:
+    - uvx wheelgap@latest uv.lock -p 3.13 -t linux-x86_64,linux-aarch64 --gitlab-code-quality gl-code-quality-report.json
+  artifacts:
+    when: always
+    reports:
+      codequality: gl-code-quality-report.json
+```
+
+Run the job on the target branch too: GitLab compares its report with the merge request's to identify new and
+resolved findings. See [GitLab Code Quality](output.md#gitlab-code-quality) for severities and location limits.
+
 ## Before a release {#before-a-release}
 
 The other place a dropped platform gets caught is right before upload. After `python -m build` or `uv build`,

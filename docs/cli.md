@@ -385,7 +385,7 @@ snippet; when no gap wheel fits, stdout is empty.
 
 It refuses, with exit code 2 and before any lookup, more than one input and any other input: `pyproject.toml`,
 `pylock.toml`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`, `pixi.lock` and a pip report. Use `--fix` alone for
-those. It can't be used with `--explain` (and its add-ons), `--all`, `--from-log`, `--dist`, `--json`, `--markdown`, `--junit`, `--sarif`, `--badge`,
+those. It can't be used with `--explain` (and its add-ons), `--all`, `--from-log`, `--dist`, `--json`, `--markdown`, `--junit`, `--sarif`, `--gitlab-code-quality`, `--badge`,
 `--write-constraints` or `--github-annotations`.
 
 ```console
@@ -418,6 +418,12 @@ a pull request comment. See [Output](output.md#markdown).
 [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) report to `PATH`, alongside the usual
 output, for GitHub code scanning. It's written even when the check fails, and an empty `PATH` is an error, as for
 `--junit`. See [Output](output.md#sarif) and [CI](ci.md#code-scanning).
+
+### `--gitlab-code-quality` {#gitlab-code-quality}
+
+`--gitlab-code-quality PATH`: also write a GitLab Code Quality JSON report to `PATH`, alongside the usual output,
+even when the check fails. An empty `PATH` is an error. See [Output](output.md#gitlab-code-quality) and
+[GitLab CI](ci.md#gitlab-ci).
 
 ### `--badge` {#badge}
 
