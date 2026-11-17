@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `--gitlab-code-quality PATH` writes wheel gaps as GitLab Code Quality findings on their lockfile lines, with stable fingerprints and severities that follow advisory targets and `--fail-on`.
+- `--gitlab-code-quality PATH` writes wheel gaps as GitLab Code Quality findings on their lockfile lines, with stable fingerprints and severities that follow advisory targets and `--fail-on`. (#509, thanks [@kushaldave002](https://github.com/kushaldave002))
 
 - A missing `*.in` requirements file now reports `no such file` instead of treating its name as a PyPI package; input docs also list pip JSON reports. (#497, thanks [@AdityaSreevatsaK](https://github.com/AdityaSreevatsaK))
 - `--fix --print-gap-wheel-snippet` prints only the configuration that installs the gap wheels, for you to copy: the `--extra-index-url` line for one requirements file or package names, or the `pyproject.toml` entries for one uv.lock, with comments that say the wheels are unofficial and what each fills. It never writes a file, and keeps the check's exit code. Other inputs and more than one input are refused with exit code 2 before anything is looked up. (#481, thanks [@AdityaSreevatsaK](https://github.com/AdityaSreevatsaK))
