@@ -21,6 +21,7 @@ Tools (all read-only; they look packages up on PyPI, or the index in WHEELGAP_IN
 - check_dist: what `wheelgap --dist DIR --json` reports for the release about to be uploaded, plus the targets
   the previous release on PyPI had a wheel for that this one drops.
 - diff_lockfiles: what `wheelgap diff OLD NEW --json` reports (the packages that got worse, and new ones with gaps).
+- suggest_targets: what `wheelgap --suggest-targets --json` reports for a project folder (reads local files only).
 - list_targets: the platform names the other tools accept.
 
 Paths may be file:// URIs. If the client has the roots capability, the server asks it for roots/list after
@@ -53,6 +54,7 @@ from packaging.version import InvalidVersion, Version
 
 from . import __version__, origin, pypi
 from . import suggest as release_suggest
+from . import suggest_targets as target_suggest
 from .api import Result, check_package, make_targets, running_python
 from .check import EXPLAIN_LIMIT, Status
 from .dockerfile import DockerfileError, read_dockerfile
@@ -390,6 +392,26 @@ TOOLS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
         "annotations": _READ_ONLY,
+    },
+    {
+        "name": "suggest_targets",
+        "title": "Suggest targets for a project",
+        "description": "Read a project folder's GitHub Actions workflows and Dockerfiles to suggest the targets and "
+        "Python versions to check (with file and line for each), plus any files that couldn't be read and the "
+        "[tool.wheelgap] config fields. Reads local files only and contacts nothing.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute path or file:// URI of the project folder (a relative path is looked "
+                    "for in the client's roots if it shares them, else in the server's working directory).",
+                },
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        "annotations": _READ_ONLY | {"openWorldHint": False},
     },
     {
         "name": "list_targets",
@@ -907,6 +929,14 @@ def _run_cli(argv: list[str], path: Path, *, positional: bool = True, project: P
     return result
 
 
+def _suggest_targets(args: dict[str, Any]) -> dict[str, Any]:
+    _check_keys("suggest_targets", args)
+    folder = _existing(_string(args, "path", required=True) or "")
+    if not folder.is_dir():
+        raise ToolError(f"{folder}: not a directory (pass a project folder)")
+    return target_suggest.to_json(target_suggest.suggest(folder))
+
+
 def _list_targets(args: dict[str, Any]) -> dict[str, Any]:
     _check_keys("list_targets", args)
     return {
@@ -925,6 +955,7 @@ _HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "check_dockerfile": _check_dockerfile,
     "check_dist": _check_dist,
     "diff_lockfiles": _diff_lockfiles,
+    "suggest_targets": _suggest_targets,
     "list_targets": _list_targets,
 }
 
@@ -1311,6 +1342,7 @@ _PATH_ARGUMENTS = {
     "check_dockerfile": ("dockerfile", "path"),
     "check_dist": ("path",),
     "diff_lockfiles": ("old", "new"),
+    "suggest_targets": ("path",),
 }
 
 

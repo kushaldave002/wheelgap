@@ -101,8 +101,10 @@ def test_tools_list_has_valid_schemas():
         "check_dockerfile",
         "check_dist",
         "diff_lockfiles",
+        "suggest_targets",
         "list_targets",
     }
+    assert tools["suggest_targets"]["annotations"]["openWorldHint"] is False
     for tool in tools.values():
         assert tool["inputSchema"]["type"] == "object"
         assert tool["annotations"]["readOnlyHint"] is True
@@ -2580,3 +2582,71 @@ def test_check_lockfile_dependencies_skips_build_info_when_configured(fake_pypi,
     data = reply["result"]["structuredContent"]
     assert data["ok"] is False
     assert fake_files.calls == []
+
+
+def test_suggest_targets_reads_workflow_and_dockerfile(fake_pypi, tmp_path):
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "ci.yml").write_text(
+        "name: CI\n"
+        "on: push\n"
+        "jobs:\n"
+        "  test:\n"
+        "    runs-on: ubuntu-24.04-arm\n"
+        "    steps:\n"
+        "      - uses: actions/setup-python@v5\n"
+        "        with:\n"
+        "          python-version: '3.13'\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "Dockerfile").write_text("FROM python:3.12-alpine\n", encoding="utf-8")
+    (_, reply) = run(init(), call("suggest_targets", path=str(tmp_path)))
+    result = reply["result"]
+    assert result["isError"] is False
+    data = result["structuredContent"]
+    assert json.loads(result["content"][0]["text"]) == data
+    assert {t["target"] for t in data["targets"]} >= {"linux-aarch64", "musl-x86_64"}
+    assert all("file" in t and "line" in t for t in data["targets"])
+    assert {p["python"] for p in data["python"]} == {"3.12", "3.13"}
+    assert all("file" in p and "line" in p for p in data["python"])
+    assert data["unreadable"] == []
+    assert data["config"]["python"] == ["3.12", "3.13"]
+    assert data["config"]["targets"] == ["linux-aarch64", "musl-x86_64"]
+    assert not fake_pypi
+
+
+def test_suggest_targets_resolves_relative_path_against_roots(tmp_path, monkeypatch):
+    work = tmp_path / "cwd"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    root = tmp_path / "root"
+    project = root / "app"
+    project.mkdir(parents=True)
+    (project / "Dockerfile").write_text("FROM python:3.13-slim\n", encoding="utf-8")
+    (_, request, reply) = run(
+        init_with_roots(),
+        INITIALIZED,
+        roots_answer(root),
+        call("suggest_targets", path="app"),
+    )
+    assert request == {"jsonrpc": "2.0", "id": "wheelgap-roots-1", "method": "roots/list"}
+    assert reply["result"]["isError"] is False
+    data = reply["result"]["structuredContent"]
+    assert [p["python"] for p in data["python"]] == ["3.13"]
+    assert [t["target"] for t in data["targets"]] == ["linux-x86_64"]
+
+
+def test_suggest_targets_rejects_missing_folder_file_and_unknown_args(tmp_path):
+    (_, reply) = run(init(), call("suggest_targets", path=str(tmp_path / "missing")))
+    assert reply["result"]["isError"] is True
+    assert "no such file or directory" in reply["result"]["content"][0]["text"]
+
+    regular_file = tmp_path / "Dockerfile"
+    regular_file.write_text("FROM python:3.13-slim\n", encoding="utf-8")
+    (_, reply) = run(init(), call("suggest_targets", path=str(regular_file)))
+    assert reply["result"]["isError"] is True
+    assert "not a directory" in reply["result"]["content"][0]["text"]
+
+    (_, reply) = run(init(), call("suggest_targets", path=str(tmp_path), extra="nope"))
+    assert reply["result"]["isError"] is True
+    assert "unknown argument(s): extra" in reply["result"]["content"][0]["text"]

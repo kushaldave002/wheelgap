@@ -1,8 +1,8 @@
 # Set up wheelgap-mcp in your agent
 
 `wheelgap-mcp` is wheelgap's [MCP](https://modelcontextprotocol.io/) server. It
-runs over stdio and gives an agent six read-only tools: `check_package`,
-`check_lockfile`, `check_dockerfile`, `check_dist`, `diff_lockfiles` and `list_targets`. Every
+runs over stdio and gives an agent seven read-only tools: `check_package`,
+`check_lockfile`, `check_dockerfile`, `check_dist`, `diff_lockfiles`, `suggest_targets` and `list_targets`. Every
 client below starts it with the same command:
 
 ```bash
@@ -19,7 +19,7 @@ too.
 
 ## Tools
 
-All six are read-only. They look packages up on PyPI, or on the index in
+All seven are read-only. They look packages up on PyPI, or on the index in
 `WHEELGAP_INDEX_URL`, and like wheelgap the server needs nothing beyond
 `packaging`.
 
@@ -62,6 +62,11 @@ All six are read-only. They look packages up on PyPI, or on the index in
   agent that bumps dependencies can save the old lockfile under its own name
   (`mkdir -p /tmp/old && git show HEAD:uv.lock > /tmp/old/uv.lock`) and ask
   whether the upgrade lost a wheel.
+- `suggest_targets`: reads a project folder's GitHub Actions workflows and
+  Dockerfiles, returning `targets`, `python`, `unreadable` (each with file and
+  line) and `config` (`[tool.wheelgap]` fields), as
+  `wheelgap --suggest-targets --json` does. Reads local files only and contacts
+  nothing.
 - `list_targets`: the platform names the other tools accept.
 
 For example, to check everything `requirements.txt` installs, call
@@ -79,7 +84,7 @@ On `pyodide` targets, `check_package` and `check_lockfile` take an optional
 `"environment": "test"` to check the `test` environment instead of `default`.
 An unknown environment is a tool error listing the lockfile's environment names.
 
-Pass `check_lockfile`, `check_dockerfile`, `check_dist` and `diff_lockfiles` an absolute path
+Pass `check_lockfile`, `check_dockerfile`, `check_dist`, `diff_lockfiles` and `suggest_targets` an absolute path
 or a `file://` URI, since the server's working directory may not be your
 project. If the client shares its
 [roots](https://modelcontextprotocol.io/specification/2025-06-18/client/roots),
@@ -158,6 +163,12 @@ for `check_dist` the nearest folder above the dist folder with a
 | `new` | string | required | Absolute path to the lockfile (or project directory) after the change. |
 | `python` | string | the server's | Target Python version(s), comma-separated, e.g. '3.13' or '3.12,3.14t' (t = free-threaded); 'next' and 'next-t' mean the newest CPython wheelgap knows. |
 | `targets` | array of strings | the four default platforms | Platforms, e.g. ['linux-aarch64', 'musl-x86_64', 'win-arm64', 'pyodide'], Docker platforms such as 'linux/arm64', or the groups 'all', 'everything' and 'mobile'. `list_targets` gives every name. |
+
+#### `suggest_targets`
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `path` | string | required | Absolute path or `file://` URI of the project folder (a relative path is looked for in the client's roots if it shares them, else in the server's working directory). |
 
 #### `list_targets`
 
