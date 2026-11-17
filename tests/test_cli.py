@@ -726,6 +726,26 @@ def test_bad_pyproject_exit_2(capsys, fixtures, tmp_path):
     assert code == 2 and "glibc must be a string" in err
 
 
+@pytest.mark.parametrize("as_json", [False, True])
+def test_missing_requirements_in_is_not_a_pypi_package(capsys, tmp_path, monkeypatch, fake_pypi, as_json):
+    # A mistyped .in file is a missing input, not a requirement to query on PyPI.
+    monkeypatch.chdir(tmp_path)
+    args = ["requirements-dev.in", "-p", "3.13", "-t", "linux-x86_64"]
+    if as_json:
+        args.append("--json")
+    code, out, err = run(capsys, *args)
+    assert code == 2
+    assert "requirements-dev.in: no such file" in err
+    assert not fake_pypi
+    if as_json:
+        assert json.loads(out)["error"] == {
+            "type": "SourceError",
+            "message": "requirements-dev.in: no such file",
+        }
+    else:
+        assert not out
+
+
 def test_json_reports_input_errors_on_stdout(capsys, fixtures, tmp_path):
     def json_error(*argv):
         code, out, err = run(capsys, *argv, "--json")

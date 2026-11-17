@@ -48,10 +48,11 @@ A **file** is read by its name:
 | `Pipfile.lock` | `Pipfile.lock` |
 | `pixi.lock` | `pixi.lock` |
 | `requirements*.lock`, `*.txt`, `*.in` | a requirements file |
+| `*.json` | a pip installation report |
 | `pyproject.toml` | a project's direct dependencies |
 
 Any other name is an error. An argument that isn't an existing file or directory is read as a
-[package name](#package-names), unless it contains `/` or ends in `.lock`, `.txt` or `.toml`, which is an error
+[package name](#package-names), unless it contains `/` or ends in `.lock`, `.txt`, `.toml`, `.json` or `.in`, which is an error
 (`no such file`).
 
 Packages that can't come from an index, such as Git, path or URL dependencies, are **skipped**: they're listed on a
