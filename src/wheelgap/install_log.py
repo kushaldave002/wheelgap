@@ -1,4 +1,4 @@
-"""--from-log: the packages a failed pip or uv install log says didn't build, with the version the log gives each.
+"""--from-log: the packages a failed pip, uv, Poetry or PDM install log says didn't build, with their logged versions.
 
 The log is untrusted text. Only a few exact message shapes count, and a failure that can't be read is an error, never
 a guess.
@@ -67,6 +67,17 @@ _PIP_SUMMARY = re.compile(r"(?:ERROR: )?Failed to build ([^`'\"]+)$")
 # never in a build's output.
 _UV = re.compile(r"\s*(?:×|├─▶|╰─▶|error:|Caused by:)\s*Failed to (?:download and )?build:? `([^`]*)`")
 _UV_NAME_VERSION = re.compile(rf"({_NAME})(?:==(\S+))?")
+# Captured with Poetry 2.5.1 and PDM 2.29.7, normal and -v (tests/fixtures/install-log-captures.md).
+# Poetry prefixes backend output with `    | `; only its own final note identifies the failed candidate.
+_POETRY_NOTE = (
+    "Note: This error originates from the build backend, and is likely not a problem with poetry "
+    "but one of the following issues with "
+)
+_POETRY_PACKAGE = re.compile(rf"({_NAME}) \(([^()]+)\)$")
+# A PDM install can fail for reasons other than building: require its named exception traceback as well.
+_PDM_INSTALL = re.compile(rf"  ✖ Install ({_NAME}) (\S+) failed\s*$")
+_PDM_ERROR = re.compile(rf"(?:add ({_NAME}) failed:|pdm\.termui: Error occurs adding ({_NAME}):)\s*$")
+_PDM_SOURCE = re.compile(r"pdm\.termui: Running PEP 517 backend to build a wheel for <Link (\S+) \(from (\S+)\)>\s*$")
 
 _UNCLEAR = "unclear"  # the log collects the package again without a version after naming one
 _DIRECT = "direct"  # the log installs the package from a URL or a path, not from an index
@@ -122,6 +133,11 @@ def failed_builds(text: str, other_index: bool = False) -> list[tuple[str, str]]
     backtracked: str | None = None
     built: set[str] = set()  # names pip printed `Building wheel for` or `Failed building wheel for` for
     failures: dict[str, tuple[str, str]] = {}
+    poetry_build = False
+    pdm_versions: dict[str, set[str]] = {}
+    pdm_sources: dict[str, set[Version]] = {}
+    pdm_error: str | None = None
+    pdm_traceback = False
 
     def failed(name: str, version: str | None) -> None:
         key = canonicalize_name(name)
@@ -198,6 +214,45 @@ def failed_builds(text: str, other_index: bool = False) -> list[tuple[str, str]]
     for line in _ANSI.sub("", text).splitlines():
         if m := _TIMESTAMP.match(line):
             line = line[m.end() :]
+        if line.startswith("Synchronizing working set with resolved packages:"):
+            pdm_versions.clear()
+            pdm_sources.clear()
+        if m := _PDM_SOURCE.fullmatch(line):
+            if found := _file_version(m.group(1)):
+                source_key = canonicalize_name(found[0])
+                if m.group(2).rstrip("/") == f"{_PYPI_SIMPLE}/{source_key}" or other_index:
+                    pdm_sources.setdefault(source_key, set()).add(Version(found[1]))
+        if line == "PEP517 build of a dependency failed":
+            if poetry_build:
+                raise SourceError("--from-log: can't read Poetry's failed build; refusing to guess")
+            poetry_build = True
+        if line.startswith(_POETRY_NOTE):
+            candidate = _POETRY_PACKAGE.fullmatch(line.removeprefix(_POETRY_NOTE))
+            if not poetry_build or candidate is None or not _is_version(candidate.group(2)):
+                raise SourceError("--from-log: can't read Poetry's failed package and version; refusing to guess")
+            failed(candidate.group(1), candidate.group(2))
+            poetry_build = False
+        if m := _PDM_INSTALL.fullmatch(line):
+            pdm_versions.setdefault(canonicalize_name(m.group(1)), set()).add(m.group(2))
+        if m := _PDM_ERROR.fullmatch(line):
+            if pdm_error is not None:
+                raise SourceError("--from-log: PDM's install failure is not a clear build failure; refusing to guess")
+            pdm_error = m.group(1) or m.group(2)
+            pdm_traceback = False
+        elif pdm_error is not None and line == "Traceback (most recent call last):":
+            pdm_traceback = True
+        elif pdm_error is not None and line.startswith("pdm.exceptions.BuildError: Build backend raised error:"):
+            seen = pdm_versions.get(canonicalize_name(pdm_error), set())
+            if not pdm_traceback or len(seen) != 1 or not all(_is_version(v) for v in seen):
+                raise SourceError("--from-log: can't read PDM's failed package and version; refusing to guess")
+            version = next(iter(seen))
+            if pdm_sources.get(canonicalize_name(pdm_error)) != {Version(version)}:
+                raise SourceError(
+                    "--from-log: PDM's log doesn't identify the failed package's index source; rerun pdm install -v "
+                    "(normal output also hides URL and path dependencies); refusing to guess"
+                )
+            failed(pdm_error, version)
+            pdm_error = None
         if diagnostic is not None:
             if not line.strip():
                 continue
@@ -260,11 +315,15 @@ def failed_builds(text: str, other_index: bool = False) -> list[tuple[str, str]]
             pip_summary(m.group(1).split())
     if diagnostic:
         raise SourceError("--from-log: can't read pip's list of packages that failed to build; refusing to guess")
+    if poetry_build:
+        raise SourceError("--from-log: can't read Poetry's failed package and version; refusing to guess")
+    if pdm_error is not None:
+        raise SourceError("--from-log: PDM's install failure is not a clear build failure; refusing to guess")
 
     if not failures:
         raise SourceError(
             "--from-log: found no package that failed to build (pip's `Failed to build NAME` or uv's "
-            "``Failed to build `NAME==VERSION` ``)"
+            "``Failed to build `NAME==VERSION` ``, or a supported Poetry/PDM build diagnostic)"
         )
     return list(failures.values())
 

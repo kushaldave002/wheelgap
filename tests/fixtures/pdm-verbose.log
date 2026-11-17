@@ -1,0 +1,10 @@
+pdm.termui: Running PEP 517 backend to build a wheel for <Link https://files.pythonhosted.org/packages/26/1d/8878c7752febb0f6716a7e1a52cb92ac98871c5aa522cba181878091607c/PyAudio-0.2.14.tar.gz (from https://pypi.org/simple/pyaudio/)>
+  ✖ Install pyaudio 0.2.14 failed
+pdm.termui: Error occurs adding pyaudio: 
+Traceback (most recent call last):
+pdm.exceptions.BuildError: Build backend raised error: Showing the last 10 lines of the build output:
+creating build/lib.macosx-26.0-arm64-cpython-312/pyaudio
+copying src/pyaudio/__init__.py -> build/lib.macosx-26.0-arm64-cpython-312/pyaudio
+running build_ext
+building 'pyaudio._portaudio' extension
+  ✖ Some package operations failed.

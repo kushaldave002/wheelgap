@@ -249,8 +249,8 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--from-log",
         metavar="FILE",
-        help="read the packages a failed pip or uv install couldn't build from its log FILE (- for stdin) and check "
-        "them with --explain --suggest; needs -p and -t (or --dockerfile) for where the install ran",
+        help="read the packages a failed pip, uv, Poetry or PDM install couldn't build from its log FILE (- for stdin) "
+        "and check them with --explain --suggest; needs -p and -t (or --dockerfile) for where the install ran",
     )
     p.add_argument("--all", action="store_true", help="show every package, not just the ones with gaps")
     p.add_argument("--explain", action="store_true", help="for each gap, list the wheels that were rejected and why")

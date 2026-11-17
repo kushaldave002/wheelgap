@@ -33,10 +33,64 @@ def log(name: str) -> str:
         ("gha-pip-mixed.log", [("forked", "1.0")]),
         # pip 25.2 and later: `× Failed to build installable wheels ...` with the names on the `╰─>` line.
         ("pip25-two-failed.log", [("fastlib", "2.0.0"), ("laggard", "1.0")]),
+        # Captured with Poetry 2.5.1 and PDM 2.29.7; see install-log-captures.md.
+        ("poetry-normal.log", [("pyaudio", "0.2.14")]),
+        ("poetry-verbose.log", [("pyaudio", "0.2.14")]),
+        ("pdm-verbose.log", [("pyaudio", "0.2.14")]),
     ],
 )
 def test_failed_builds(name, expected):
     assert failed_builds(log(name)) == expected
+
+
+@pytest.mark.parametrize("name", ["poetry-normal.log", "pdm-verbose.log"])
+def test_project_tool_build_output_is_not_another_failed_package(name):
+    text = log(name).replace(
+        "building 'pyaudio._portaudio' extension",
+        "building 'other_package' extension\nFailed to build other_package\n  ✖ Install other_package 9.9 failed",
+    )
+    assert failed_builds(text) == [("pyaudio", "0.2.14")]
+
+
+@pytest.mark.parametrize("name", ["poetry-normal.log", "pdm-normal.log", "pdm-verbose.log"])
+def test_project_tool_incomplete_diagnostic_refuses_partial_results(name):
+    text = log("uv-ansi.log") + log(name)
+    if name.startswith("poetry"):
+        text = text.replace("issues with pyaudio (0.2.14)", "issues with pyaudio (not-a-version)")
+    else:
+        text = text.replace("pdm.exceptions.BuildError:", "pdm.exceptions.InstallationError:")
+    with pytest.raises(SourceError, match="Poetry|PDM"):
+        failed_builds(text)
+
+
+def test_pdm_failure_without_build_error_is_not_a_build_failure():
+    text = "  ✖ Install pyaudio 0.2.14 failed\nERRORS:\nadd pyaudio failed:\n"
+    text += "Traceback (most recent call last):\nOSError: download failed\n"
+    with pytest.raises(SourceError, match="PDM"):
+        failed_builds(text)
+
+
+def test_pdm_failure_without_install_version_is_refused():
+    text = log("pdm-normal.log").replace("  ✖ Install pyaudio 0.2.14 failed\n", "")
+    with pytest.raises(SourceError, match="PDM"):
+        failed_builds(text)
+
+
+def test_pdm_normal_output_cannot_distinguish_an_index_package_from_a_local_one():
+    with pytest.raises(SourceError, match="index source.*pdm install -v"):
+        failed_builds(log("pdm-normal.log"))
+
+
+@pytest.mark.parametrize("source", ["https://private.example/simple/pyaudio/", "file:///local/pyaudio/"])
+def test_pdm_other_source_is_refused(source):
+    text = log("pdm-verbose.log").replace("https://pypi.org/simple/pyaudio/", source)
+    with pytest.raises(SourceError, match="index source"):
+        failed_builds(text)
+
+
+def test_pdm_explicit_other_index_is_allowed():
+    text = log("pdm-verbose.log").replace("https://pypi.org/simple/pyaudio/", "https://private.example/simple/pyaudio/")
+    assert failed_builds(text, other_index=True) == [("pyaudio", "0.2.14")]
 
 
 @pytest.mark.parametrize(

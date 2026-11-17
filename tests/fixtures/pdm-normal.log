@@ -1,0 +1,12 @@
+  ✖ Install pyaudio 0.2.14 failed
+
+ERRORS:
+add pyaudio failed:
+Traceback (most recent call last):
+pdm.exceptions.BuildError: Build backend raised error: Showing the last 10 lines
+of the build output:
+running build
+running build_py
+running build_ext
+building 'pyaudio._portaudio' extension
+  0:00:01 ✖ Some package operations failed. 1/1

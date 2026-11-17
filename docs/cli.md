@@ -242,7 +242,7 @@ A wheel that would fit but whose release was yanked is named with the reason `ya
 
 ### `--from-log` {#from-log}
 
-`--from-log FILE` reads the log of a failed `pip install` or uv install (`-` reads stdin), finds the
+`--from-log FILE` reads a failed pip, uv, Poetry or PDM install log (`-` reads stdin), finds the
 packages that failed to build, and checks each one as `--explain --suggest` does: why no wheel fits, and the release
 that has one. The log doesn't say where the install ran, so pass `-p` and `-t` for that machine (or `--dockerfile` for
 a docker build); without them it's an error.
@@ -270,6 +270,15 @@ in links:` (`--find-links`, with or without `--no-index`) and wheelgap isn't giv
 `index-url` in `[tool.wheelgap]`, or `WHEELGAP_INDEX_URL`), when a failure line can't be read, or when more than 50
 packages failed. Colour codes and GitHub Actions timestamps are skipped, a UTF-16 log (PowerShell's `>`) is read too,
 and of a longer log only the last 8 MiB is read.
+
+Poetry 2.5.1 logs (normal or `-v`) are read from the final build-backend error note, which names the package and
+version; the backend's own indented output does not count. PDM 2.29.7 requires `pdm install -v`: its normal output
+prints the same name and version for index, URL and local-path dependencies, so it cannot safely identify an index
+package. In verbose output, the parser requires the index-origin build link, the failed install's name and version,
+and PDM's named `BuildError` traceback. Download and other install errors are refused, rather than reported as build
+failures. PDM's index must be PyPI, unless wheelgap is given `--index-url`. Other tool versions whose diagnostics differ
+are refused rather than guessed. As with uv, Poetry's error note does not identify the index: pass the index used
+by the install with `--index-url` when it was not PyPI.
 
 A note lists the packages the log says failed, and another says when one has a wheel for a checked target after all:
 then the log likely comes from another platform or Python than `-p` and `-t`. `--no-suggest` turns `--suggest` off.
