@@ -40,8 +40,11 @@ it couldn't read is `unknown`, as in a lockfile.
 | `--json` | print one JSON object instead of the text report |
 | `--deps` | `OLD` and `NEW` are pinned releases: resolve and compare their whole trees ([above](#comparing-two-package-versions)) |
 
-The same `-p` and `-t` apply to both lockfiles. `[tool.wheelgap]` and `.python-version` aren't read yet, so pass them
-explicitly. `--advisory` doesn't work with `wheelgap diff` yet.
+The same `-p` and `-t` apply to both lockfiles. `wheelgap diff` reads `[tool.wheelgap]` (`python`, `targets`, `glibc`,
+`musl`, `distro`, `macos`, `ios`, `android-api`), `[tool.uv] required-environments` and `.python-version` from the
+`NEW` input's project directory (using the working tree for a `REF:PATH` input), with command-line flags winning over
+them just as in the main command. Keys `diff` doesn't use yet (`ignore`, `advisory`, `groups`, ...) are accepted and
+ignored. `--advisory` doesn't work with `wheelgap diff` yet.
 
 ## What counts as worse
 

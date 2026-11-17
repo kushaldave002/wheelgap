@@ -708,3 +708,78 @@ def test_diff_uv_lock_new_transitive_gap_names_its_direct_owner(fake_pypi, tmp_p
     assert report["new"][0]["direct"] == {"linux-x86_64": ["purewheel"]}
     assert main([str(old_dir), str(new_dir), *TARGET]) == 1
     assert "NoWheels (via purewheel) 0.9 (new)" in capsys.readouterr().out
+
+
+def test_diff_reads_tool_wheelgap_config_and_cli_flags_win(fake_pypi, tmp_path, capsys):
+    old, new = write_pair(tmp_path, *NEW_GLIBC_PAIR)
+    # Put [tool.wheelgap] beside the NEW input, including keys diff ignores (ignore, advisory, groups).
+    (tmp_path / "new" / "pyproject.toml").write_text(
+        "[tool.wheelgap]\n"
+        'python = ["3.13"]\n'
+        'targets = ["linux-x86_64"]\n'
+        'distro = "rhel-8"\n'
+        'ignore = ["somepkg"]\n'
+        'advisory = ["win-arm64"]\n'
+        'groups = ["dev"]\n',
+        encoding="utf-8",
+    )
+    # Config targets + distro (rhel-8 = glibc 2.28) apply with no -p / -t / --distro flags.
+    assert main([old, new]) == 1
+    assert capsys.readouterr().out.splitlines() == GLIBCLAG_WORSE
+    # Explicit --glibc wins over config distro.
+    assert main([old, new, "--glibc", "2.36"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["Nothing got worse."]
+    # Explicit -t wins over config targets.
+    assert main([old, new, "-t", "win-amd64"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["Nothing got worse."]
+
+
+def test_diff_reads_python_version_file(fake_pypi, tmp_path, capsys):
+    old, new = write_pair(tmp_path, "ranged==1.5\n", "ranged==1.9\n")
+    (tmp_path / "new" / ".python-version").write_text("3.13.2\n", encoding="utf-8")
+    assert main([old, new, "-t", "linux-x86_64", "--json"]) == 1
+    assert [t["python"] for t in json.loads(capsys.readouterr().out)["targets"]] == ["3.13"]
+    # Explicit -p wins over .python-version.
+    assert main([old, new, "-p", "3.14", "-t", "linux-x86_64", "--json"]) == 1
+    assert [t["python"] for t in json.loads(capsys.readouterr().out)["targets"]] == ["3.14"]
+
+
+def test_diff_reads_uv_required_environments_as_default_targets(fake_pypi, tmp_path, capsys):
+    old, new = write_pair(tmp_path, "ranged==1.5\n", "ranged==1.9\n")
+    (tmp_path / "new" / "pyproject.toml").write_text(
+        "[tool.uv]\nrequired-environments = [\"sys_platform == 'win32' and platform_machine == 'AMD64'\"]\n",
+        encoding="utf-8",
+    )
+    assert main([old, new, "-p", "3.13", "--json"]) == 1
+    out, err = capsys.readouterr()
+    assert [t["platform"] for t in json.loads(out)["targets"]] == ["win-amd64"]
+    assert "[tool.uv] required-environments" in err
+
+
+def test_diff_malformed_tool_wheelgap_exits_2(fake_pypi, tmp_path, capsys):
+    old, new = write_pair(tmp_path, "purewheel==3.1\n", "purewheel==3.1\n")
+    (tmp_path / "new" / "pyproject.toml").write_text('[tool.wheelgap]\ntargets = "not-a-list"\n', encoding="utf-8")
+    assert main([old, new]) == 2
+    assert "wheelgap: error:" in capsys.readouterr().err
+
+
+def test_diff_git_ref_uses_working_tree_config(fake_pypi, tmp_path, capsys, monkeypatch):
+    if shutil.which("git") is None:
+        pytest.skip("git not installed")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    (tmp_path / "requirements.txt").write_text("ranged==1.5\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text('[tool.wheelgap]\ntargets = ["win-amd64"]\n', encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "v1"], cwd=tmp_path, check=True)
+    (tmp_path / "requirements.txt").write_text("ranged==1.9\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-q", "-am", "v2"], cwd=tmp_path, check=True)
+    # Working-tree pyproject.toml switches targets to linux-x86_64 (uncommitted); REF:PATH must read working tree.
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.wheelgap]\npython = ["3.13"]\ntargets = ["linux-x86_64"]\n', encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    assert main(["HEAD~1:requirements.txt", "HEAD:requirements.txt", "--json"]) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert [t["platform"] for t in report["targets"]] == ["linux-x86_64"]
