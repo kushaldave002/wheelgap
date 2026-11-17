@@ -123,16 +123,19 @@ Include every uv project extra (or every `pyproject.toml` extra, or every Poetry
 
 ### `--group` {#group}
 
-`--group NAME`: include a dependency group (`uv.lock`, Poetry 2.x `poetry.lock`, `pdm.lock`). Repeatable.
+`--group NAME`: include a dependency group (`uv.lock`, Poetry 2.x `poetry.lock`, `pdm.lock`, or a
+`pyproject.toml` `[dependency-groups]` group). Repeatable. With `pyproject.toml`, no group is included by default.
 
 ### `--no-dev` {#no-dev}
 
-Leave out the `dev` group (`uv.lock`, Poetry 2.x `poetry.lock`, `pdm.lock`).
+Leave out the `dev` group (`uv.lock`, Poetry 2.x `poetry.lock`, `pdm.lock`). An error for `pyproject.toml`,
+which includes no group by default.
 
 ### `--only-group` {#only-group}
 
 `--only-group NAME`: check only the named dependency groups, without the project's own dependencies or default
-groups. Repeatable; combine it with `--group` to add more groups, but not with `--extra` or `--all-extras`.
+groups (`uv.lock`, Poetry 2.x `poetry.lock`, `pdm.lock`, or `pyproject.toml` `[dependency-groups]`).
+Repeatable; combine it with `--group` to add more groups, but not with `--extra` or `--all-extras`.
 
 ### `--environment` {#environment}
 

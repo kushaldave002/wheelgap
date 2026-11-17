@@ -2691,8 +2691,8 @@ def test_pyproject_extra_adds_optional_dependencies(capsys, fake_pypi, tmp_path,
     "text,flags,error",
     [
         (LIB_PYPROJECT, ["--extra", "docs"], "unknown extras: docs"),
-        (LIB_PYPROJECT, ["--group", "dev"], "don't apply to pyproject.toml"),
-        (LIB_PYPROJECT, ["--no-dev"], "don't apply to pyproject.toml"),
+        (LIB_PYPROJECT, ["--group", "dev"], "unknown dependency groups: dev"),
+        (LIB_PYPROJECT, ["--no-dev"], "--no-dev does not apply to pyproject.toml"),
         ('[project]\nname = "x"\ndynamic = ["dependencies"]\n', [], "dependencies is dynamic"),
         (
             '[project]\nname = "x"\ndependencies = []\ndynamic = ["optional-dependencies"]\n',
@@ -2708,6 +2708,64 @@ def test_pyproject_input_errors_exit_2(capsys, fake_pypi, tmp_path, text, flags,
     assert code == 2
     assert error in err
     assert fake_pypi == []  # nothing was looked up
+
+
+@pytest.mark.parametrize(
+    "flags,expected",
+    [
+        ([], {"ranged", "fastlib"}),
+        (["--group", "test"], {"ranged", "fastlib", "nowheels"}),
+        (["--only-group", "test"], {"nowheels"}),
+        (["--only-group", "test", "--group", "docs"], {"nowheels", "purewheel"}),
+        (["--group", "QA_Group"], {"ranged", "fastlib", "nowheels", "purewheel"}),
+        (["--only-group", "self"], {"nowheels"}),
+    ],
+)
+def test_pyproject_dependency_groups(capsys, fake_pypi, tmp_path, flags, expected):
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        LIB_PYPROJECT + "\n[dependency-groups]\n"
+        'test = ["nowheels", "nowheels"]\ndocs = ["purewheel==3.1"]\n'
+        'qa-group = [{include-group = "test"}, {include-group = "docs"}]\n'
+        'self = ["MyLib[test]"]\n',
+        encoding="utf-8",
+    )
+    code, out, _ = run(capsys, str(path), "-p", "3.13", "-t", "linux-x86_64", "--json", *flags)
+    assert code == 1
+    rows = json.loads(out)["packages"]
+    assert {row["name"] for row in rows} == expected
+    assert len(rows) == len(expected)
+    assert not any("mylib" in url.lower() for url in fake_pypi)
+
+
+@pytest.mark.parametrize(
+    "groups,flags,error",
+    [
+        ('test = [{include-group = "other"}]\nother = [{include-group = "test"}]', [], "cycle"),
+        ('test = [{include-group = "absent"}]', [], "unknown dependency groups: absent"),
+        ("test = [42]", [], "entry"),
+        ("test = [{include-group = 42}]", [], "entry"),
+        ('test = [{include-group = "other", unexpected = true}]', [], "entry"),
+        ('test = "nowheels"', [], "list"),
+        ("test = []\nTest = []", [], "once normalized"),
+        ("test = []", ["--only-group", "test", "--extra", "test"], "cannot be combined"),
+    ],
+)
+def test_pyproject_dependency_group_errors(capsys, fake_pypi, tmp_path, groups, flags, error):
+    path = tmp_path / "pyproject.toml"
+    path.write_text(LIB_PYPROJECT + "\n[dependency-groups]\n" + groups, encoding="utf-8")
+    code, _, err = run(capsys, str(path), "-p", "3.13", "-t", "linux-x86_64", "--group", "test", *flags)
+    assert code == 2 and error in err
+    assert not fake_pypi
+
+
+@pytest.mark.usefixtures("index")
+def test_pyproject_dependency_group_resolves_tree(capsys, fake_pypi, tmp_path):
+    path = tmp_path / "pyproject.toml"
+    path.write_text('[project]\nname = "mylib"\n[dependency-groups]\ntest = ["app"]\n', encoding="utf-8")
+    code, out, _ = run(capsys, str(path), "--group", "test", "--deps", "-p", "3.14", "-t", "win-arm64", "--json")
+    assert code == 1
+    assert {row["name"] for row in json.loads(out)["packages"]} == {"app", "lib", "crypt", "winonly"}
 
 
 def test_pyproject_self_reference_in_dependencies_is_not_looked_up(capsys, fake_pypi, tmp_path):
