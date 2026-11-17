@@ -22,6 +22,7 @@ Tools (all read-only; they look packages up on PyPI, or the index in WHEELGAP_IN
   the previous release on PyPI had a wheel for that this one drops.
 - diff_lockfiles: what `wheelgap diff OLD NEW --json` reports (the packages that got worse, and new ones with gaps).
 - list_targets: the platform names the other tools accept.
+- suggest_targets: targets and Python versions named in a project's workflows and Dockerfiles, without lookups.
 
 Paths may be file:// URIs. If the client has the roots capability, the server asks it for roots/list after
 notifications/initialized (and again on notifications/roots/list_changed), and a relative path is resolved against the
@@ -58,6 +59,7 @@ from .check import EXPLAIN_LIMIT, Status
 from .dockerfile import DockerfileError, read_dockerfile
 from .pyodide import PyodideLockError, load_pyodide_lock
 from .sources import SourceError
+from .suggest_targets import suggest, to_json
 from .targets import (
     ALIASES,
     DEFAULT_GLIBC,
@@ -161,6 +163,26 @@ _PYODIDE_LOCK_PROP = {
 _READ_ONLY = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True}
 
 TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "suggest_targets",
+        "title": "Suggest a project's targets",
+        "description": "Read a project's GitHub Actions workflows and Dockerfiles to suggest targets and Python "
+        "versions, with the file and line for each, unreadable inputs and suggested config. Reads local files only; "
+        "nothing is changed or checked. Confirm the suggestions with the user before checking their project.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute path or file:// URI of the project folder (a relative path is looked "
+                    "for in the client's roots if it shares them, else in the server's working directory).",
+                },
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        "annotations": _READ_ONLY | {"openWorldHint": False},
+    },
     {
         "name": "check_package",
         "title": "Check a package's wheels",
@@ -907,6 +929,15 @@ def _run_cli(argv: list[str], path: Path, *, positional: bool = True, project: P
     return result
 
 
+def _suggest_targets(args: dict[str, Any]) -> dict[str, Any]:
+    _check_keys("suggest_targets", args)
+    folder = _existing(_string(args, "path", required=True) or "")
+    try:
+        return to_json(suggest(folder))
+    except OSError as e:
+        raise ToolError(str(e)) from e
+
+
 def _list_targets(args: dict[str, Any]) -> dict[str, Any]:
     _check_keys("list_targets", args)
     return {
@@ -926,6 +957,7 @@ _HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "check_dist": _check_dist,
     "diff_lockfiles": _diff_lockfiles,
     "list_targets": _list_targets,
+    "suggest_targets": _suggest_targets,
 }
 
 
@@ -1306,6 +1338,7 @@ def _complete(result: dict[str, Any], result_type: str = "complete") -> dict[str
 # The arguments each tool resolves with _existing (pyodide_lock: on 2026 roots calls), so against the client's
 # roots when relative.
 _PATH_ARGUMENTS = {
+    "suggest_targets": ("path",),
     "check_package": ("pyodide_lock",),
     "check_lockfile": ("path", "pyodide_lock"),
     "check_dockerfile": ("dockerfile", "path"),

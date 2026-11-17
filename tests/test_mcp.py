@@ -102,6 +102,7 @@ def test_tools_list_has_valid_schemas():
         "check_dist",
         "diff_lockfiles",
         "list_targets",
+        "suggest_targets",
     }
     for tool in tools.values():
         assert tool["inputSchema"]["type"] == "object"
@@ -1232,6 +1233,66 @@ def test_list_targets():
     assert "musl-aarch64" in data["platforms"]
     assert data["groups"]["all"] and set(data["groups"]["all"]) <= set(data["platforms"])
     assert set(data["aliases"].values()) <= set(data["platforms"])
+
+
+@pytest.mark.parametrize("uri", [False, True])
+def test_suggest_targets_reads_workflows_and_dockerfiles(tmp_path, uri):
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "ci.yml").write_text("jobs:\n  test:\n    runs-on: windows-latest\n", encoding="utf-8")
+    (tmp_path / "Dockerfile").write_text("FROM python:3.13-alpine\n", encoding="utf-8")
+    (_, reply) = run(init(), call("suggest_targets", path=tmp_path.as_uri() if uri else str(tmp_path)))
+    result = reply["result"]
+    assert result["isError"] is False
+    data = result["structuredContent"]
+    assert json.loads(result["content"][0]["text"]) == data
+    assert {(t["target"], t["file"], t["line"]) for t in data["targets"]} == {
+        ("win-amd64", ".github/workflows/ci.yml", 3),
+        ("musl-x86_64", "Dockerfile", 1),
+    }
+    assert [(p["python"], p["file"], p["line"]) for p in data["python"]] == [("3.13", "Dockerfile", 1)]
+    assert data["unreadable"] == []
+    assert data["config"] == {"python": ["3.13"], "targets": ["musl-x86_64", "win-amd64"], "musl": "1.2"}
+    tool = next(t for t in mcp.TOOLS if t["name"] == "suggest_targets")
+    assert tool["annotations"] == mcp._READ_ONLY | {"openWorldHint": False}
+
+
+@pytest.mark.parametrize("modern", [False, True])
+def test_suggest_targets_relative_path_uses_client_roots(tmp_path, monkeypatch, modern):
+    project = tmp_path / "root" / "project"
+    project.mkdir(parents=True)
+    (project / "Dockerfile").write_text("FROM python:3.13-alpine\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    if modern:
+        message = with_roots(modern_call("suggest_targets", path="project"))
+        (request,) = run(message)
+        assert request["result"]["resultType"] == "input_required"
+        message["params"]["inputResponses"] = {"roots": roots_answer_for(project.parent)}
+        (reply,) = run(message)
+    else:
+        (_, _, reply) = run(
+            init_with_roots(), INITIALIZED, roots_answer(project.parent), call("suggest_targets", path="project")
+        )
+    assert reply["result"]["isError"] is False
+    assert reply["result"]["structuredContent"]["config"]["python"] == ["3.13"]
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        ({"path": "missing"}, "no such file or directory"),
+        ({"path": "Dockerfile"}, "not a folder"),
+        ({}, "'path' is required"),
+        ({"path": 1}, "'path' must be a non-empty string"),
+        ({"path": ".", "targets": []}, "unknown argument(s): targets"),
+    ],
+)
+def test_suggest_targets_rejects_invalid_arguments(tmp_path, monkeypatch, args, message):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "Dockerfile").write_text("FROM python:3.13-alpine\n", encoding="utf-8")
+    (_, reply) = run(init(), call("suggest_targets", **args))
+    assert reply["result"]["isError"] is True
+    assert message in reply["result"]["content"][0]["text"]
 
 
 def test_stray_prints_stay_off_the_protocol_stream(monkeypatch):

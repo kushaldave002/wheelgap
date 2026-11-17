@@ -1,8 +1,8 @@
 # Set up wheelgap-mcp in your agent
 
 `wheelgap-mcp` is wheelgap's [MCP](https://modelcontextprotocol.io/) server. It
-runs over stdio and gives an agent six read-only tools: `check_package`,
-`check_lockfile`, `check_dockerfile`, `check_dist`, `diff_lockfiles` and `list_targets`. Every
+runs over stdio and gives an agent seven read-only tools: `check_package`,
+`check_lockfile`, `check_dockerfile`, `check_dist`, `diff_lockfiles`, `list_targets` and `suggest_targets`. Every
 client below starts it with the same command:
 
 ```bash
@@ -19,8 +19,8 @@ too.
 
 ## Tools
 
-All six are read-only. They look packages up on PyPI, or on the index in
-`WHEELGAP_INDEX_URL`, and like wheelgap the server needs nothing beyond
+All seven are read-only. Package checks look packages up on PyPI, or on the index in
+`WHEELGAP_INDEX_URL`; `list_targets` and `suggest_targets` contact nothing. Like wheelgap the server needs nothing beyond
 `packaging`.
 
 - `check_package`: one package, the latest release or a given version, on each
@@ -63,6 +63,11 @@ All six are read-only. They look packages up on PyPI, or on the index in
   (`mkdir -p /tmp/old && git show HEAD:uv.lock > /tmp/old/uv.lock`) and ask
   whether the upgrade lost a wheel.
 - `list_targets`: the platform names the other tools accept.
+- `suggest_targets`: read the project's GitHub Actions workflows and Dockerfiles,
+  returning `targets`, `python`, `unreadable` and suggested `config`, as
+  `wheelgap --suggest-targets --json` does. Each finding names its file and line.
+  Nothing is changed or checked; confirm the suggested platforms with the user
+  before checking their project. A missing folder is a tool error.
 
 For example, to check everything `requirements.txt` installs, call
 `check_lockfile` with `{"path": "requirements.txt", "python": "3.13",
@@ -162,6 +167,12 @@ for `check_dist` the nearest folder above the dist folder with a
 #### `list_targets`
 
 No arguments.
+
+#### `suggest_targets`
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `path` | string | required | Absolute path or `file://` URI of the project folder. A relative path is resolved against the client's roots if shared, else the server's working directory. |
 
 ## Claude Code
 
