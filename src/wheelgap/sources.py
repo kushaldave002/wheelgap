@@ -2380,7 +2380,7 @@ def load_inputs(inputs: list[str], environment: str | None = None) -> list[Sourc
                 sources[-1].passed_over = p / "pixi.lock"
         elif p.is_file():
             sources.append(load_file(p, environment))
-        elif "/" in item or item.endswith((".lock", ".txt", ".toml", ".json", ".yml", ".yaml")):
+        elif "/" in item or item.endswith((".lock", ".txt", ".toml", ".json", ".in", ".yml", ".yaml")):
             raise SourceError(f"{item}: no such file")
         else:
             adhoc.packages.append(requirement_to_package(item, "command line"))

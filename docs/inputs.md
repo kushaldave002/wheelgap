@@ -49,11 +49,12 @@ A **file** is read by its name:
 | `Pipfile.lock` | `Pipfile.lock` |
 | `pixi.lock` | `pixi.lock` |
 | `requirements*.lock`, `*.txt`, `*.in` | a requirements file |
+| `*.json` | a pip installation report |
 | `environment.yml`, `environment.yaml` | a conda environment file (pip packages) |
 | `pyproject.toml` | a project's direct dependencies |
 
 Any other name is an error. An argument that isn't an existing file or directory is read as a
-[package name](#package-names), unless it contains `/` or ends in `.lock`, `.txt`, `.toml`, `.json`, `.yml` or `.yaml`, which is an error
+[package name](#package-names), unless it contains `/` or ends in `.lock`, `.txt`, `.toml`, `.json`, `.in`, `.yml` or `.yaml`, which is an error
 (`no such file`).
 
 Packages that can't come from an index, such as Git, path or URL dependencies, are **skipped**: they're listed on a

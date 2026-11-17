@@ -22,6 +22,11 @@ NEWDROP = {  # 1.1 has the Windows ARM wheel 1.0 lacks, but not 1.0's Linux one
     "1.0": ["newdrop-1.0-cp313-cp313-manylinux_2_17_x86_64.whl", "newdrop-1.0.tar.gz"],
     "1.1": ["newdrop-1.1-cp313-cp313-win_arm64.whl", "newdrop-1.1.tar.gz"],
 }
+DIFFPY = {  # 2.0 needs Python 3.14; 0.9 has wheels for both, while 1.0 and 2.0 both gap on win-arm64
+    "0.9": ["diffpy-0.9-cp313-cp313-win_arm64.whl", "diffpy-0.9-cp314-cp314-win_arm64.whl", "diffpy-0.9.tar.gz"],
+    "1.0": [{"filename": "diffpy-1.0.tar.gz", "requires_python": "<3.14"}],
+    "2.0": [{"filename": "diffpy-2.0.tar.gz", "requires_python": ">=3.14"}],
+}
 
 
 def written(tmp_path):
@@ -74,6 +79,31 @@ def test_never_a_pin_that_loses_a_wheel_elsewhere(capsys, tmp_path, monkeypatch)
         "# left out newdrop for win-arm64: a release with a wheel there loses one elsewhere",
         "# left out oldwin for win-arm64: a release with a wheel there loses one elsewhere",
     ]
+    assert "wrote 0 pins" in err
+
+
+@pytest.mark.usefixtures("fake_pypi")
+def test_leaves_out_range_that_resolves_to_different_releases_per_python(capsys, tmp_path, monkeypatch):
+    monkeypatch.setitem(FAKE_INDEX, "diffpy", DIFFPY)
+    path = str(tmp_path / "constraints.txt")
+    args = [
+        "diffpy>=1.0",
+        "-p",
+        "3.13",
+        "-p",
+        "3.14",
+        "-t",
+        "win-arm64",
+        "--explain",
+        "--suggest",
+        "--write-constraints",
+        path,
+        "--color",
+        "never",
+    ]
+    code, _, err = run(capsys, *args)
+    assert code == 1
+    assert written(tmp_path)[3:] == ["# left out diffpy: it resolves to different releases on different Pythons"]
     assert "wrote 0 pins" in err
 
 
