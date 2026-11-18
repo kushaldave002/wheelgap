@@ -2760,7 +2760,7 @@ def test_pyproject_dependency_group_errors(capsys, fake_pypi, tmp_path, groups, 
 
 
 @pytest.mark.usefixtures("index")
-def test_pyproject_dependency_group_resolves_tree(capsys, fake_pypi, tmp_path):
+def test_pyproject_dependency_group_resolves_tree(capsys, tmp_path):
     path = tmp_path / "pyproject.toml"
     path.write_text('[project]\nname = "mylib"\n[dependency-groups]\ntest = ["app"]\n', encoding="utf-8")
     code, out, _ = run(capsys, str(path), "--group", "test", "--deps", "-p", "3.14", "-t", "win-arm64", "--json")
