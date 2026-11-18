@@ -52,6 +52,9 @@ def test_pre_commit_hook_matches_dependency_and_config_files(path: str):
         "my-uv.toml",
         "foo.python-version",
         "pyproject.toml.bak",
+        "sub/requirements.in",
+        "setup.cfg",
+        "tox.ini",
     ],
 )
 def test_pre_commit_hook_ignores_unrelated_files(path: str):
