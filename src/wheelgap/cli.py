@@ -38,6 +38,7 @@ from .check import (
     marker_holds,
     reachable,
 )
+from .codequality import write_codequality
 from .constraints import write_constraints
 from .deps import Resolver, pinned_complete, resolve_deps
 from .dockerfile import DockerfileError, read_dockerfile
@@ -66,6 +67,7 @@ from .sources import (
     parse_dist,
     pythons_outside_lock,
     select_pyproject_extras,
+    select_pyproject_groups,
     select_uv_dependencies,
     skipped_list,
     uv_selected_roots,
@@ -151,7 +153,8 @@ def make_parser() -> argparse.ArgumentParser:
         metavar="INPUT",
         help=(
             "uv.lock, pylock.toml, poetry.lock, Pipfile.lock, pixi.lock, requirements.txt, report.json, "
-            "pyproject.toml (direct dependencies), a directory, or package specs (default: .)"
+            "environment.yml (pip packages), pyproject.toml (direct dependencies), a directory, or package specs "
+            "(default: .)"
         ),
     )
     p.add_argument(
@@ -219,7 +222,10 @@ def make_parser() -> argparse.ArgumentParser:
         "--group",
         action="append",
         metavar="NAME",
-        help="include a dependency group (uv.lock, Poetry 2.x poetry.lock, pdm.lock; repeatable)",
+        help=(
+            "include a dependency group (uv.lock, Poetry 2.x poetry.lock, pdm.lock, or pyproject.toml "
+            "[dependency-groups]; repeatable)"
+        ),
     )
     p.add_argument(
         "--no-dev", action="store_true", help="exclude the dev group (uv.lock, Poetry 2.x poetry.lock, pdm.lock)"
@@ -330,6 +336,11 @@ def make_parser() -> argparse.ArgumentParser:
         "--junit",
         metavar="PATH",
         help="also write a JUnit XML report to PATH, alongside the usual output",
+    )
+    p.add_argument(
+        "--gitlab-code-quality",
+        metavar="PATH",
+        help="also write a GitLab Code Quality JSON report to PATH for merge request findings",
     )
     p.add_argument(
         "--sarif",
@@ -1719,6 +1730,7 @@ def _main(argv: list[str], project: Path | None = None) -> int:
                 ("--dist", bool(args.dist)),
                 ("--junit", args.junit is not None),
                 ("--sarif", args.sarif is not None),
+                ("--gitlab-code-quality", args.gitlab_code_quality is not None),
                 ("--badge", args.badge is not None),
                 ("--write-constraints", args.write_constraints is not None),
                 ("--github-annotations", args.github_annotations),
@@ -1960,16 +1972,20 @@ def _main(argv: list[str], project: Path | None = None) -> int:
             group_names = [name for name in group_names if canonicalize_name(name) != "dev"]
         from_cli = args.extra is not None or args.group is not None or args.all_extras or args.no_dev
         # pyproject.toml inputs take --extra / --all-extras for [project] optional-dependencies. Configured
-        # extras don't apply to them, and [dependency-groups] isn't read.
+        # extras and groups don't apply to them; groups are selected explicitly as with pip --group.
         pyproject_sources = [s for s in sources if s.pyproject_extras is not None]
         lock_sources = [s for s in sources if s.pyproject_extras is None]
         if pyproject_sources:
-            if args.group is not None or args.only_group or args.no_dev:
+            if args.no_dev:
                 raise SourceError(
-                    "--group, --only-group and --no-dev don't apply to pyproject.toml: "
-                    "[dependency-groups] isn't read, only [project] dependencies and --extra groups"
+                    "--no-dev doesn't apply to pyproject.toml: no dependency group is selected by default"
+                )
+            if args.only_group and (args.extra or args.all_extras):
+                raise SourceError(
+                    "--only-group cannot be combined with --extra or --all-extras for pyproject.toml inputs"
                 )
             for source in pyproject_sources:
+                select_pyproject_groups(source, args.group or [], args.only_group or [])
                 select_pyproject_extras(source, args.extra or [], args.all_extras)
         if (from_cli or args.only_group or extra_names is not None or group_names is not None) and (
             lock_sources or not pyproject_sources
@@ -2406,6 +2422,13 @@ def _main(argv: list[str], project: Path | None = None) -> int:
     if args.sarif is not None:  # an empty PATH is an error, as for --junit
         try:
             write_sarif(args.sarif, rows, targets, sources, fail_on, advisory)
+        except OSError as e:
+            print(f"wheelgap: error: {e}", file=sys.stderr)
+            return input_error_json(e) if args.json else 2
+
+    if args.gitlab_code_quality is not None:  # written even when the check fails; an empty PATH is an error
+        try:
+            write_codequality(args.gitlab_code_quality, rows, targets, sources, fail_on, advisory)
         except OSError as e:
             print(f"wheelgap: error: {e}", file=sys.stderr)
             return input_error_json(e) if args.json else 2
