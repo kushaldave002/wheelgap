@@ -242,8 +242,10 @@ wheelgap:
       codequality: gl-code-quality-report.json
 ```
 
-Run the job on the target branch too: GitLab compares its report with the merge request's to identify new and
-resolved findings. See [GitLab Code Quality](output.md#gitlab-code-quality) for severities and location limits.
+GitLab shows the findings in the merge request widget on every tier, inline in the merge request's changes view on
+Ultimate, and in the pipeline's Code Quality tab on Premium and above. Run the job on the target branch too: GitLab
+compares its report with the merge request's to identify new and resolved findings. See
+[GitLab Code Quality](output.md#gitlab-code-quality) for severities and location limits.
 
 ## Before a release {#before-a-release}
 

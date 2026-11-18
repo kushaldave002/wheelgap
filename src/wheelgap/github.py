@@ -307,10 +307,11 @@ class Locator:
         return {}  # pyproject.toml: the file, but no line
 
 
-def relative_path(path: Path) -> str | None:
-    """The path GitHub expects: relative to the repository (GITHUB_WORKSPACE, else the current directory), with
-    forward slashes. None for a file outside it, which GitHub couldn't show in the diff."""
-    base = os.environ.get("GITHUB_WORKSPACE") or os.getcwd()
+def relative_path(path: Path, root_env: str = "GITHUB_WORKSPACE") -> str | None:
+    """The path GitHub expects: relative to the repository (the `root_env` variable, GITHUB_WORKSPACE by default,
+    else the current directory), with forward slashes. None for a file outside it, which GitHub couldn't show in the
+    diff."""
+    base = os.environ.get(root_env) or os.getcwd()
     try:
         return path.resolve().relative_to(Path(base).resolve()).as_posix()
     except (OSError, ValueError):

@@ -560,9 +560,11 @@ another SARIF viewer), alongside whatever output mode you use. It has two rules,
 
 `--gitlab-code-quality PATH` writes a [GitLab Code Quality report](https://docs.gitlab.com/ci/testing/code_quality/#code-quality-report-format)
 as a JSON array, alongside the usual output and even when the check fails. Each finding names one package and gap
-target, with check name `wheelgap/source` or `wheelgap/missing` and a stable SHA-256 fingerprint of the canonical
-package name, version and target (including Python). Changing report order or adding another Python does not change
-an existing finding's fingerprint.
+target, with check name `wheelgap/source` or `wheelgap/missing` and a SHA-256 fingerprint of the file, canonical
+package name and target (always including the Python), not the version, so GitLab keeps one finding across lockfile
+bumps until the gap goes away. Changing report order or adding another Python doesn't change an existing finding's
+fingerprint, and the same package in two files is two findings. Each fingerprint appears once per report: a package
+that one file locks at several versions gets one finding, for the first.
 
 Severity is `critical` for `missing`, `major` for `source`, `minor` for a source build `--fail-on missing` accepts,
 and `info` on an `--advisory` target. Ignored gaps and `unknown` cells have no finding; failed lookups still fail the
