@@ -185,7 +185,7 @@ wheelgap ships a **`check-wheels` skill** that teaches coding agents to run it, 
 
 **Codex, Cursor, GitHub Copilot and others:** copy [`integrations/claude-code/skills/check-wheels/`](integrations/claude-code/skills/check-wheels/) into your project's `.agents/skills/` folder. For a Cursor project rule instead, copy [`integrations/cursor/wheelgap.mdc`](integrations/cursor/wheelgap.mdc) to `.cursor/rules/`.
 
-**As an MCP server:** `wheelgap-mcp` lets any agent that speaks the [Model Context Protocol](https://modelcontextprotocol.io/) call wheelgap as a tool, with read-only `check_package`, `check_lockfile`, `check_dockerfile`, `check_dist`, `diff_lockfiles` and `list_targets` tools. For Claude Code:
+**As an MCP server:** `wheelgap-mcp` lets any agent that speaks the [Model Context Protocol](https://modelcontextprotocol.io/) call wheelgap as a tool, with read-only `check_package`, `check_lockfile`, `check_dockerfile`, `check_dist`, `diff_lockfiles`, `suggest_targets` and `list_targets` tools. For Claude Code:
 
 ```bash
 claude mcp add wheelgap -- uvx --from wheelgap wheelgap-mcp
@@ -210,7 +210,7 @@ This checks both lockfiles and lists the packages that got worse on a target (a 
 ## How it works
 
 - **Lockfiles are read offline.** `uv.lock`, `pylock.toml`, `poetry.lock` and `pdm.lock` already record every file published for each pinned version. wheelgap parses the wheel filenames' tags with [`packaging`](https://packaging.pypa.io/) and checks them against the exact tag set each target accepts. That is the same logic pip and uv use to pick a wheel.
-- **`requirements.txt`, `Pipfile.lock`, `pixi.lock`, `environment.yml`, `pyproject.toml` and bare package names** are looked up on the PyPI JSON API (or your `--index-url`). wheelgap checks the requirements you give it and doesn't resolve dependencies, except for package names, requirements files, `environment.yml` and `pyproject.toml` inputs with `--deps`, which resolves what they install per target from PyPI's metadata.
+- **`requirements.txt`, `Pipfile.lock`, `pixi.lock`, `environment.yml`, `pyproject.toml` and bare package names** are looked up on the PyPI JSON API (or your `--index-url`). wheelgap checks the requirements you give it and doesn't resolve dependencies, except for package names, requirements files, `environment.yml` and `pyproject.toml` inputs with `--deps`, which resolves what they install per target from PyPI's metadata. For `pyproject.toml`, `--group NAME` also checks a PEP 735 dependency group and `--only-group NAME` checks just the named groups (no group is selected by default).
 - **Environment markers are respected.** A `pywin32 ; sys_platform == 'win32'` dependency won't show up as a Linux gap. For `uv.lock` the dependency graph is walked per target, so transitive platform-specific packages are handled too.
 - **No guessing.** Where wheelgap can't be sure, it says `unknown`, which counts as a gap, rather than guess.
 

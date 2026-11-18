@@ -155,6 +155,8 @@ class Source:
     pyproject_extras: dict[str, list[str]] | None = None
     # pyproject.toml only: optional-dependencies is listed in [project] dynamic, so the extras can't be read.
     pyproject_dynamic_extras: bool = False
+    # PEP 735 groups, expanded only when explicitly selected.
+    pyproject_groups: dict[str, object] = field(default_factory=dict)
     # pyproject.toml only: the canonical [project] name, to spot `myproject[extra]` self-references.
     pyproject_name: str | None = None
     # poetry.lock only: each package's [[package]] table, kept so --group/--only-group/--no-dev can pick packages
@@ -1220,9 +1222,19 @@ def parse_pyproject(path: Path) -> Source:
                 "(PEP 685)"
             )
         extras[key] = list(lines)
+    groups = data.get("dependency-groups", {})
+    if not isinstance(groups, dict):
+        raise SourceError(f"{path}: [dependency-groups] must be a table")
+    normalized_groups: dict[str, object] = {}
+    for name, entries in groups.items():
+        key = canonicalize_name(name)
+        if key in normalized_groups:
+            raise SourceError(f"{path}: [dependency-groups] has two groups that are both {key!r} once normalized")
+        normalized_groups[key] = entries
     source = Source(
         path.name,
         pyproject_extras=extras,
+        pyproject_groups=normalized_groups,
         pyproject_dynamic_extras="optional-dependencies" in dynamic,
         pypi_only=not (_names_an_index(data) or _nearby_config_names_an_index(path)),
     )
@@ -1258,6 +1270,69 @@ def select_pyproject_extras(source: Source, extras: Iterable[str], all_extras: b
     if unknown := sorted(set(wanted) - set(available)):
         raise SourceError(f"{source.label}: unknown extras: {', '.join(unknown)}")
     _add_extras(source, wanted)
+
+
+def select_pyproject_groups(source: Source, groups: Iterable[str], only_groups: Iterable[str]) -> None:
+    """Add explicitly selected PEP 735 groups, expanding include-group entries without cycles. With
+    --only-group the project's own dependencies are left out, unless a selected group requires the project
+    itself (`myproject` or `myproject[extra]`), which installs them."""
+    only = [canonicalize_name(name) for name in only_groups]
+    wanted = [canonicalize_name(name) for name in groups] + only
+    if unknown := sorted(set(wanted) - set(source.pyproject_groups)):
+        raise SourceError(f"{source.label}: unknown groups: {', '.join(unknown)}")
+    lines: list[str] = []
+    visited: set[str] = set()
+
+    def expand(name: str, active: set[str]) -> None:
+        if name in active:
+            raise SourceError(f"{source.label}: dependency group cycle involving {name!r}")
+        if name in visited:
+            return
+        entries = source.pyproject_groups[name]
+        if not isinstance(entries, list):
+            raise SourceError(f"{source.label}: dependency group {name!r} must be a list")
+        for entry in entries:
+            if isinstance(entry, str):
+                lines.append(entry)
+            elif (
+                isinstance(entry, dict) and set(entry) == {"include-group"} and isinstance(entry["include-group"], str)
+            ):
+                included = canonicalize_name(entry["include-group"])
+                if included not in source.pyproject_groups:
+                    raise SourceError(
+                        f"{source.label}: dependency group {name!r} includes unknown group {entry['include-group']!r}"
+                    )
+                expand(included, active | {name})
+            else:
+                raise SourceError(f"{source.label}: invalid dependency group entry in {name!r}: {entry!r}")
+        visited.add(name)
+
+    for name in wanted:
+        expand(name, set())
+    requirements: list[tuple[str, Requirement]] = []
+    for line in lines:
+        try:
+            requirements.append((line, Requirement(line)))
+        except InvalidRequirement as e:
+            raise SourceError(f"{source.label}: can't parse requirement {line!r}: {e}") from None
+    names_project = source.pyproject_name is not None and any(
+        canonicalize_name(req.name) == source.pyproject_name for _, req in requirements
+    )
+    if only and not names_project:
+        source.packages.clear()
+        source.specs.clear()
+    self_extras: list[str] = []
+    for line, req in requirements:
+        if source.pyproject_name is not None and canonicalize_name(req.name) == source.pyproject_name:
+            # Installing the project installs its dependencies, and `myproject[extra]` that extra too.
+            self_extras.extend(_self_reference_extras(source, line, req))
+            continue
+        pkg = requirement_to_package(line, source.label)
+        if line not in source.specs:
+            source.specs.append(line)
+        if pkg not in source.packages:
+            source.packages.append(pkg)
+    _add_extras(source, self_extras)
 
 
 def _self_reference_extras(source: Source, line: str, req: Requirement) -> list[str]:

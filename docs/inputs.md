@@ -319,6 +319,9 @@ wheelgap pyproject.toml -t win-arm64 -t pyodide
 # Add [project.optional-dependencies] groups
 wheelgap pyproject.toml --extra test
 wheelgap pyproject.toml --all-extras
+# Add PEP 735 dependency groups, or check only those groups
+wheelgap pyproject.toml --group test
+wheelgap pyproject.toml --only-group docs
 # Resolve what the declared requirements and the selected extra install
 wheelgap pyproject.toml --extra test --deps -t win-arm64 --explain
 ```
@@ -327,16 +330,23 @@ Each requirement is read like a line of a requirements file, so ranges and bare 
 and markers are respected. A range picks the newest release whose `Requires-Python` allows each `-p` version, so with
 several it can pick a different release per Python ([how it works](how-it-works.md)). A bare name always checks the
 latest release, even for a `-p` version that can't install it, so it can show false gaps. Only direct
-dependencies are checked by default and wheelgap prints a note saying so. Add [`--deps`](cli.md#deps) to resolve
-them and the selected extras using PyPI's metadata for each target. Projects that configure a custom installer
-index or source need a lockfile for this check.
+dependencies are checked by default and wheelgap prints a note saying so. Add [`--deps`](cli.md#deps) to resolve them
+and the selected extras and dependency groups using PyPI's metadata for each target. Projects that configure a custom
+installer index or source need a lockfile for this check.
 
 If `[project] requires-python` leaves out a `-p` Python (every clause counts, as pip applies them), that target is
 still checked and a note names it; an invalid `requires-python` is ignored with a note.
 
-`[dependency-groups]` isn't read yet, so `--group`, `--only-group` and `--no-dev` are errors here. A `dependencies`
-listed in `[project] dynamic` is an input error (exit 2), as are dynamic `optional-dependencies` with
-`--extra`/`--all-extras` and Poetry dependencies kept in `[tool.poetry.dependencies]` (check `poetry.lock` instead).
+`[dependency-groups]` (PEP 735) is read with no group selected by default, as with `pip install --group`. `--group NAME`
+adds a group to the project's dependencies; `--only-group NAME` checks only the named groups (combine it with `--group`
+to add more, but not with `--extra` or `--all-extras`). Group names are normalized, `{include-group = "name"}` entries
+include another group, and duplicate requirements count once. A requirement on the project itself in a group installs
+the project: `mylib` adds the project's dependencies, and `mylib[test]` adds them and the `test` extra, with
+`--only-group` too. Unknown groups, include cycles, malformed entries and names that collide once normalized are input
+errors (exit 2); a group that isn't selected isn't read further than its name. `--no-dev` stays an error because no
+group is included by default. A `dependencies` listed in `[project] dynamic` is an input error (exit 2), as are dynamic
+`optional-dependencies` with `--extra`/`--all-extras` and Poetry dependencies kept in `[tool.poetry.dependencies]`
+(check `poetry.lock` instead).
 `check_lockfile()` and `wheelgap diff` don't read `pyproject.toml` as an input.
 
 ## Package names
