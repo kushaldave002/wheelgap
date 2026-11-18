@@ -156,7 +156,7 @@ repos:
       - id: wheelgap
 ```
 
-The hook runs when a lockfile or requirements file changes. Put your targets in `[tool.wheelgap]` in `pyproject.toml` so the hook checks the right platforms.
+The hook runs when a lockfile, requirements file, `pyproject.toml`, `uv.toml` or `.python-version` changes. Put your targets in `[tool.wheelgap]` in `pyproject.toml` so the hook checks the right platforms.
 
 ## From Python
 
