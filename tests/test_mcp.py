@@ -12,6 +12,7 @@ from test_deps import INDEX, LINUX, WIN_AMD, WIN_ARM, index, release  # noqa: F4
 from test_dist import LINUX_WHEEL, SDIST, WIN_ARM_WHEEL, dist
 
 from wheelgap import __version__, cli, mcp
+from wheelgap.suggest_targets import Suggestions, Unreadable
 
 
 def run(*messages: object, raw: bytes = b"") -> list:
@@ -101,9 +102,10 @@ def test_tools_list_has_valid_schemas():
         "check_dockerfile",
         "check_dist",
         "diff_lockfiles",
-        "list_targets",
         "suggest_targets",
+        "list_targets",
     }
+    assert tools["suggest_targets"]["annotations"] == mcp._READ_ONLY | {"openWorldHint": False}
     for tool in tools.values():
         assert tool["inputSchema"]["type"] == "object"
         assert tool["annotations"]["readOnlyHint"] is True
@@ -1236,7 +1238,7 @@ def test_list_targets():
 
 
 @pytest.mark.parametrize("uri", [False, True])
-def test_suggest_targets_reads_workflows_and_dockerfiles(tmp_path, uri):
+def test_suggest_targets_reads_workflows_and_dockerfiles(fake_pypi, tmp_path, uri):
     workflows = tmp_path / ".github" / "workflows"
     workflows.mkdir(parents=True)
     (workflows / "ci.yml").write_text("jobs:\n  test:\n    runs-on: windows-latest\n", encoding="utf-8")
@@ -1253,8 +1255,28 @@ def test_suggest_targets_reads_workflows_and_dockerfiles(tmp_path, uri):
     assert [(p["python"], p["file"], p["line"]) for p in data["python"]] == [("3.13", "Dockerfile", 1)]
     assert data["unreadable"] == []
     assert data["config"] == {"python": ["3.13"], "targets": ["musl-x86_64", "win-amd64"], "musl": "1.2"}
-    tool = next(t for t in mcp.TOOLS if t["name"] == "suggest_targets")
-    assert tool["annotations"] == mcp._READ_ONLY | {"openWorldHint": False}
+    assert not fake_pypi
+
+
+def test_suggest_targets_refuses_the_filesystem_root_and_home_folder(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(mcp.Path, "home", staticmethod(lambda: home))
+    for folder in (Path(tmp_path.anchor), home):
+        (_, reply) = run(init(), call("suggest_targets", path=str(folder)))
+        assert reply["result"]["isError"] is True
+        assert "pass the project folder, not / or your home folder" in reply["result"]["content"][0]["text"]
+    (home / "project").mkdir()
+    (_, reply) = run(init(), call("suggest_targets", path=str(home / "project")))
+    assert reply["result"]["isError"] is False
+
+
+def test_suggest_targets_clips_unreadable_reasons(tmp_path, monkeypatch):
+    found = Suggestions(unreadable=[Unreadable("Dockerfile", 1, "x" * 1000)])
+    monkeypatch.setattr(mcp, "suggest", lambda folder: found)
+    (_, reply) = run(init(), call("suggest_targets", path=str(tmp_path)))
+    (item,) = reply["result"]["structuredContent"]["unreadable"]
+    assert item == {"file": "Dockerfile", "line": 1, "reason": "x" * 197 + "..."}
 
 
 @pytest.mark.parametrize("modern", [False, True])

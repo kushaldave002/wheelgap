@@ -22,7 +22,7 @@ The README and docs on `main` can describe changes that aren't on PyPI yet; `CHA
 - [With pre-commit](https://github.com/wheelgap/wheelgap#with-pre-commit): the pre-commit hook
 - [From Python](https://github.com/wheelgap/wheelgap/blob/main/docs/python-api.md): `make_targets`, `check_package`, `check_lockfile` (with `deps=True`, everything a requirements file or `pyproject.toml` installs)
 - [With an AI coding agent](https://github.com/wheelgap/wheelgap#with-an-ai-coding-agent): the `check-wheels` skill for Claude Code, Codex, Cursor and Copilot
-- [MCP server](https://github.com/wheelgap/wheelgap/blob/main/docs/mcp.md): `uvx --from wheelgap wheelgap-mcp`, a stdio MCP server with read-only `check_package` (with `dependencies: true`, everything it installs too), `check_lockfile`, `check_dockerfile`, `check_dist`, `diff_lockfiles` and `list_targets` tools; setup for Claude Code, Cursor, VS Code, Codex and Claude Desktop
+- [MCP server](https://github.com/wheelgap/wheelgap/blob/main/docs/mcp.md): `uvx --from wheelgap wheelgap-mcp`, a stdio MCP server with read-only `check_package` (with `dependencies: true`, everything it installs too), `check_lockfile`, `check_dockerfile`, `check_dist`, `diff_lockfiles`, `suggest_targets` and `list_targets` tools; setup for Claude Code, Cursor, VS Code, Codex and Claude Desktop
 
 ## Optional
 

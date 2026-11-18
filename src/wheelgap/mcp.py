@@ -21,8 +21,8 @@ Tools (all read-only; they look packages up on PyPI, or the index in WHEELGAP_IN
 - check_dist: what `wheelgap --dist DIR --json` reports for the release about to be uploaded, plus the targets
   the previous release on PyPI had a wheel for that this one drops.
 - diff_lockfiles: what `wheelgap diff OLD NEW --json` reports (the packages that got worse, and new ones with gaps).
-- list_targets: the platform names the other tools accept.
 - suggest_targets: targets and Python versions named in a project's workflows and Dockerfiles, without lookups.
+- list_targets: the platform names the other tools accept.
 
 Paths may be file:// URIs. If the client has the roots capability, the server asks it for roots/list after
 notifications/initialized (and again on notifications/roots/list_changed), and a relative path is resolved against the
@@ -35,6 +35,7 @@ path must then be in one of those roots (unless the list is empty): it is never 
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import io
 import json
 import os
@@ -117,7 +118,8 @@ INSTRUCTIONS = (
     "wheel anywhere (save the old lockfile under its own name first, e.g. `mkdir -p /tmp/old && git show "
     "HEAD:uv.lock > /tmp/old/uv.lock`). Pass the project's Python version: results "
     "differ between versions. Linux results assume a glibc (manylinux) or musl version: pass the one your image or "
-    "distro has."
+    "distro has. If the user hasn't said which platforms they deploy to, call suggest_targets on the project folder "
+    "and confirm its suggestions with them."
 )
 
 _STATUS_HELP = (
@@ -163,26 +165,6 @@ _PYODIDE_LOCK_PROP = {
 _READ_ONLY = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True}
 
 TOOLS: list[dict[str, Any]] = [
-    {
-        "name": "suggest_targets",
-        "title": "Suggest a project's targets",
-        "description": "Read a project's GitHub Actions workflows and Dockerfiles to suggest targets and Python "
-        "versions, with the file and line for each, unreadable inputs and suggested config. Reads local files only; "
-        "nothing is changed or checked. Confirm the suggestions with the user before checking their project.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Absolute path or file:// URI of the project folder (a relative path is looked "
-                    "for in the client's roots if it shares them, else in the server's working directory).",
-                },
-            },
-            "required": ["path"],
-            "additionalProperties": False,
-        },
-        "annotations": _READ_ONLY | {"openWorldHint": False},
-    },
     {
         "name": "check_package",
         "title": "Check a package's wheels",
@@ -412,6 +394,26 @@ TOOLS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
         "annotations": _READ_ONLY,
+    },
+    {
+        "name": "suggest_targets",
+        "title": "Suggest a project's targets",
+        "description": "Read a project's GitHub Actions workflows and Dockerfiles to suggest targets and Python "
+        "versions, with the file and line for each, unreadable inputs and suggested config. Reads local files only; "
+        "nothing is changed or checked. Confirm the suggestions with the user before checking their project.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute path or file:// URI of the project folder (a relative path is looked "
+                    "for in the client's roots if it shares them, else in the server's working directory).",
+                },
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        "annotations": _READ_ONLY | {"openWorldHint": False},
     },
     {
         "name": "list_targets",
@@ -932,10 +934,27 @@ def _run_cli(argv: list[str], path: Path, *, positional: bool = True, project: P
 def _suggest_targets(args: dict[str, Any]) -> dict[str, Any]:
     _check_keys("suggest_targets", args)
     folder = _existing(_string(args, "path", required=True) or "")
+    if _root_or_home(folder):  # walking all of it would read every project's files, slowly
+        raise ToolError(f"{_clip(str(folder))}: pass the project folder, not / or your home folder")
     try:
-        return to_json(suggest(folder))
+        found = suggest(folder)
     except OSError as e:
         raise ToolError(str(e)) from e
+    # Reasons can quote a workflow's or Dockerfile's text: keep what reaches the model bounded.
+    found.unreadable = [dataclasses.replace(u, reason=_clip(u.reason)) for u in found.unreadable]
+    return to_json(found)
+
+
+def _root_or_home(folder: Path) -> bool:
+    try:
+        resolved = folder.resolve()
+    except (OSError, RuntimeError):  # a symlink loop: suggest() reports it
+        return False
+    try:
+        home = Path.home().resolve()
+    except (OSError, RuntimeError, KeyError):  # no home folder to be found
+        home = None
+    return resolved == Path(resolved.anchor) or resolved == home
 
 
 def _list_targets(args: dict[str, Any]) -> dict[str, Any]:
@@ -956,8 +975,8 @@ _HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "check_dockerfile": _check_dockerfile,
     "check_dist": _check_dist,
     "diff_lockfiles": _diff_lockfiles,
-    "list_targets": _list_targets,
     "suggest_targets": _suggest_targets,
+    "list_targets": _list_targets,
 }
 
 
@@ -1338,12 +1357,12 @@ def _complete(result: dict[str, Any], result_type: str = "complete") -> dict[str
 # The arguments each tool resolves with _existing (pyodide_lock: on 2026 roots calls), so against the client's
 # roots when relative.
 _PATH_ARGUMENTS = {
-    "suggest_targets": ("path",),
     "check_package": ("pyodide_lock",),
     "check_lockfile": ("path", "pyodide_lock"),
     "check_dockerfile": ("dockerfile", "path"),
     "check_dist": ("path",),
     "diff_lockfiles": ("old", "new"),
+    "suggest_targets": ("path",),
 }
 
 

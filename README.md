@@ -185,7 +185,7 @@ wheelgap ships a **`check-wheels` skill** that teaches coding agents to run it, 
 
 **Codex, Cursor, GitHub Copilot and others:** copy [`integrations/claude-code/skills/check-wheels/`](integrations/claude-code/skills/check-wheels/) into your project's `.agents/skills/` folder. For a Cursor project rule instead, copy [`integrations/cursor/wheelgap.mdc`](integrations/cursor/wheelgap.mdc) to `.cursor/rules/`.
 
-**As an MCP server:** `wheelgap-mcp` lets any agent that speaks the [Model Context Protocol](https://modelcontextprotocol.io/) call wheelgap as a tool, with read-only `check_package`, `check_lockfile`, `check_dockerfile`, `check_dist`, `diff_lockfiles` and `list_targets` tools. For Claude Code:
+**As an MCP server:** `wheelgap-mcp` lets any agent that speaks the [Model Context Protocol](https://modelcontextprotocol.io/) call wheelgap as a tool, with read-only `check_package`, `check_lockfile`, `check_dockerfile`, `check_dist`, `diff_lockfiles`, `suggest_targets` and `list_targets` tools. For Claude Code:
 
 ```bash
 claude mcp add wheelgap -- uvx --from wheelgap wheelgap-mcp
