@@ -389,7 +389,7 @@ def make_parser() -> argparse.ArgumentParser:
         nargs="?",
         const=".",
         metavar="DIR",
-        help="suggest targets and Pythons from DIR's GitHub Actions workflows and Dockerfiles (default: .), "
+        help="suggest targets and Pythons from DIR's GitHub Actions, GitLab CI and Dockerfiles (default: .), "
         "with a [tool.wheelgap] snippet; checks nothing",
     )
     p.add_argument("-V", "--version", action="version", version=version_string())
