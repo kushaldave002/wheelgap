@@ -202,7 +202,7 @@ to PyPI. Can't be combined with `--offline`.
 ### `--offline` {#offline}
 
 Never contact an index, for CI and coding agents without network. Inputs that need a lookup (requirements files,
-`pyproject.toml`, `Pipfile.lock`, package names, lockfile entries with no file list, and `pixi.lock`)
+`pyproject.toml`, `Pipfile.lock`, package names, lockfile entries with no file list, `pixi.lock` and `environment.yml`)
 make it exit 2 with an error
 naming the packages, so use a lockfile instead. A `--pyodide-lock` URL is refused too: pass a downloaded copy. The
 [`requires-python` re-check](inputs.md#uvlock) is skipped, with a note that those Pythons may show false gaps.
@@ -364,9 +364,9 @@ See [Installing from the gap wheel index](recipes.md#installing-from-the-gap-whe
 With `--explain` too (**after 0.13.0**), each package a gap wheel fills gets a `gap wheel` line under its first filled
 target, naming the targets it fills and saying the wheel is unofficial: built by wheelgap from the PyPI sdist, not from
 the package's maintainers. For inputs pip installs from as they are (a requirements file, a `pyproject.toml`, a pip
-report or package names) it gives the `pip install --extra-index-url` command; for a lockfile it points to the
-`--fix` section, since that lockfile's own tool has to pick the index up. With `--json`, each package gets
-[`gap_wheel`](output.md#fix).
+report, an `environment.yml`'s `pip:` list or package names) it gives the `pip install --extra-index-url` command;
+for a lockfile it points to the `--fix` section, since that lockfile's own tool has to pick the index up. With
+`--json`, each package gets [`gap_wheel`](output.md#fix).
 
 ### `--print-gap-wheel-snippet` {#print-gap-wheel-snippet}
 
@@ -384,8 +384,8 @@ snippet; when no gap wheel fits, stdout is empty.
   dependency. Add them to an existing `[tool.uv.sources]` table rather than a second one, then run `uv lock`.
 
 It refuses, with exit code 2 and before any lookup, more than one input and any other input: `pyproject.toml`,
-`pylock.toml`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`, `pixi.lock` and a pip report. Use `--fix` alone for
-those. It can't be used with `--explain` (and its add-ons), `--all`, `--from-log`, `--dist`, `--json`, `--markdown`, `--junit`, `--sarif`, `--badge`,
+`pylock.toml`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`, `pixi.lock`, a pip report and an `environment.yml`. Use
+`--fix` alone for those. It can't be used with `--explain` (and its add-ons), `--all`, `--from-log`, `--dist`, `--json`, `--markdown`, `--junit`, `--sarif`, `--badge`,
 `--write-constraints` or `--github-annotations`.
 
 ```console

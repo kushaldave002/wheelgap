@@ -1664,11 +1664,21 @@ class _YamlError(Exception):
         super().__init__(f"line {number}: {message}")
 
 
+class _FlowList(list[object]):
+    """A sequence _BlockYaml read from flow style (`[a, b]`), which a caller can refuse where it wants block style."""
+
+
 class _BlockYaml:
     """The block-style YAML subset pixi writes (serde_yaml): mappings, sequences (also "indentless" ones under a
     key), plain and quoted one-line scalars, and the empty `[]` and `{}`. Scalars stay strings. Anything else
     (anchors, aliases, tags, block scalars, flow collections, multi-line scalars, comments, tabs) is an error rather
-    than a guess at what YAML would make of it."""
+    than a guess at what YAML would make of it.
+
+    `comments=True` (conda environment files, which people write by hand) also reads `#` comments: whole-line ones,
+    and from a whitespace-then-`#` to the end of a line (after a closing quote too, but never inside a quoted
+    scalar), as YAML does. That's safe here because block and multi-line scalars, where `#` isn't a comment, are
+    errors anyway. It also reads a one-line flow sequence of plain scalars (`channels: [conda-forge, defaults]`) as a
+    _FlowList, for the caller to refuse where it wants block style."""
 
     _ESCAPES = {'"': '"', "\\": "\\", "/": "/", "n": "\n", "t": "\t", "r": "\r", "0": "\0"}
     # Tabs, control characters (libyaml refuses most of them), line breaks other than \n and \r (which
@@ -1676,7 +1686,8 @@ class _BlockYaml:
     # noncharacters U+FFFE and U+FFFF, which libyaml refuses too.
     _BAD_CHAR = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029\ufeff\ud800-\udfff\ufffe\uffff]")
 
-    def __init__(self, text: str):
+    def __init__(self, text: str, comments: bool = False):
+        self.comments = comments
         self.lines: list[tuple[int, int, str]] = []  # (line number, indent, content)
         for number, raw in enumerate(text.replace("\r\n", "\n").replace("\r", "\n").split("\n"), 1):
             if bad := self._BAD_CHAR.search(raw):
@@ -1685,10 +1696,39 @@ class _BlockYaml:
             if not line:
                 continue
             content = line.lstrip(" ")
+            if comments and content.startswith("#"):
+                continue
             if content.startswith("#") or (line == content and content.startswith(("---", "..."))):
                 raise _YamlError(number, "comments and document markers aren't supported")
-            self.lines.append((number, len(line) - len(content), content))
+            indent = len(line) - len(content)
+            if comments:
+                content = self._strip_comment(content, number)
+            self.lines.append((number, indent, content))
         self.i = 0
+
+    def _strip_comment(self, content: str, number: int) -> str:
+        """`content` without a trailing `# comment` (and the spaces before it). A `#` starts a comment only after a
+        space and outside a quoted scalar, which starts where a node does: at the start, after `- ` or after `: `."""
+        i, node_start = 0, True
+        while i < len(content):
+            c = content[i]
+            if c == " ":
+                i += 1
+            elif c == "#" and (i == 0 or content[i - 1] == " "):
+                return content[:i].rstrip(" ")
+            elif node_start and c in "'\"":
+                end = self._quoted_end(content[i:], number)
+                if end is None:
+                    return content  # unclosed: _scalar says so
+                i += end
+                node_start = False
+            elif c in "-:" and content[i + 1 : i + 2] in ("", " ") and (c == ":" or node_start):
+                i += 1
+                node_start = True
+            else:
+                i += 1
+                node_start = False
+        return content
 
     def read(self) -> object:
         if not self.lines:
@@ -1799,6 +1839,8 @@ class _BlockYaml:
             raise _YamlError(number, "empty key")
         if text in ("[]", "{}"):
             return [] if text == "[]" else {}
+        if self.comments and text[0] == "[" and text[-1] == "]":
+            return self._flow_sequence(text, number)
         if text[0] in "'\"":
             if self._quoted_end(text, number) != len(text):
                 raise _YamlError(number, "a quoted string must end on its own line")
@@ -1815,6 +1857,13 @@ class _BlockYaml:
         ):
             raise _YamlError(number, f"unsupported YAML: {text[:40]!r}")
         return text
+
+    def _flow_sequence(self, text: str, number: int) -> _FlowList:
+        """A one-line flow sequence of plain scalars, like `[conda-forge, defaults]`; anything richer is an error."""
+        items = [item.strip(" ") for item in text[1:-1].split(",")]
+        if any(not item or item[0] in "'\"" or any(c in item for c in "[]{}") for item in items):
+            raise _YamlError(number, f"unsupported YAML: {text[:40]!r} (only a flow sequence of plain scalars)")
+        return _FlowList(self._scalar(item, number) for item in items)
 
     def _unescape(self, text: str, number: int) -> str:
         out, i = [], 0
@@ -2187,7 +2236,7 @@ def parse_conda_env(path: Path) -> Source:
     except UnicodeDecodeError as e:
         raise SourceError(f"{path.name}: not valid UTF-8 (byte {e.start}), so it can't be read for sure") from None
     try:
-        doc = _BlockYaml(text).read()
+        doc = _BlockYaml(text, comments=True).read()
     except _YamlError as e:
         raise SourceError(f"{path.name}: {e}") from None
     if not isinstance(doc, dict):
@@ -2195,8 +2244,8 @@ def parse_conda_env(path: Path) -> Source:
     raw_deps = doc.get("dependencies")
     if raw_deps is None:
         raw_deps = []
-    if not isinstance(raw_deps, list):
-        raise SourceError(f"{path.name}: `dependencies` must be a list")
+    if not isinstance(raw_deps, list) or isinstance(raw_deps, _FlowList):
+        raise SourceError(f"{path.name}: `dependencies` must be a block-style list (`- name` lines)")
 
     conda_skips: list[Package] = []
     pip_lines: list[str] = []
@@ -2204,14 +2253,16 @@ def parse_conda_env(path: Path) -> Source:
         if isinstance(entry, str):
             conda_skips.append(Package(_conda_package_name(entry), None, skip="conda", origin=path.name))
         elif isinstance(entry, dict):
+            if not entry:
+                raise SourceError(f"{path.name}: unsupported empty mapping in `dependencies`")
             if list(entry.keys()) != ["pip"]:
                 keys = ", ".join(str(k) for k in entry)
                 raise SourceError(f"{path.name}: unsupported mapping in `dependencies` ({keys})")
             pip_list = entry["pip"]
             if pip_list is None:
                 continue
-            if not isinstance(pip_list, list):
-                raise SourceError(f"{path.name}: `pip` dependencies must be a list")
+            if not isinstance(pip_list, list) or isinstance(pip_list, _FlowList):
+                raise SourceError(f"{path.name}: `pip` dependencies must be a block-style list (`- name` lines)")
             for item in pip_list:
                 if not isinstance(item, str):
                     raise SourceError(f"{path.name}: `pip` dependency entries must be strings")
@@ -2287,7 +2338,7 @@ def file_kind(path: Path) -> str:
     name = path.name
     if name == "pyproject.toml":
         return "pyproject"
-    if name in ("environment.yml", "environment.yaml"):
+    if name.startswith("environment") and name.endswith((".yml", ".yaml")):
         return "conda-env"
     if name in PARSERS:
         return PARSERS[name]

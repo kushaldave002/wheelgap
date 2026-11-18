@@ -50,7 +50,7 @@ A **file** is read by its name:
 | `pixi.lock` | `pixi.lock` |
 | `requirements*.lock`, `*.txt`, `*.in` | a requirements file |
 | `*.json` | a pip installation report |
-| `environment.yml`, `environment.yaml` | a conda environment file (pip packages) |
+| `environment*.yml`, `environment*.yaml` | a conda environment file (pip packages) |
 | `pyproject.toml` | a project's direct dependencies |
 
 Any other name is an error. An argument that isn't an existing file or directory is read as a
@@ -282,10 +282,11 @@ holds, as pip evaluates it: `urllib3<2; python_version < "3.12"` constrains Pyth
 target can't decide a marker on an installed package (`platform_release`, `platform_version`, or `platform_machine`
 on a target such as `linux-armv7l`), wheelgap refuses rather than guess, as it does for a URL or path constraint.
 
-## environment.yml {#environmentyml}
+## environment.yml
 
-Pass a conda `environment.yml` or `environment.yaml` by explicit path (directory search doesn't pick it up) to check
-the PyPI packages listed under `dependencies:` → `pip:`:
+Pass a conda `environment.yml` or `environment.yaml` (or another `environment*.yml` / `environment*.yaml` name, such
+as `environment-dev.yml`) by explicit path (directory search doesn't pick it up) to check the PyPI packages listed
+under `dependencies:` → `pip:`:
 
 ```bash
 wheelgap environment.yml -p 3.12 -t linux-aarch64,win-arm64
@@ -299,8 +300,14 @@ markers, `-r` / `-c` includes, `--no-binary` / `--only-binary` and `--deps` work
 path and URL lines under `pip:` are skipped as in a requirements file. When the `pip:` list is empty (or absent),
 wheelgap reports `No packages to check.` and exits `0`.
 
-The file is read with wheelgap's strict block-YAML reader: YAML constructs it doesn't understand (anchors, aliases,
-flow collections, tabs, comments) are input errors (exit 2) rather than guesses.
+**`--deps` and conda packages:** with `--deps`, every dependency of the `pip:` packages is looked up on PyPI, including
+ones conda installs (such as `numpy`). pip skips a requirement that conda already satisfied in the environment, so
+wheelgap can report a gap that pip would never hit there, or check a different version than conda installed.
+
+The file is read with wheelgap's strict block-YAML reader. `#` comments (whole-line, or after a space at the end of a
+line) and a one-line `channels: [conda-forge, defaults]` are read; `dependencies` and `pip:` must be block lists
+(`- name` lines). YAML constructs it doesn't understand (anchors, aliases, other flow collections, block scalars,
+tabs) are input errors (exit 2) rather than guesses.
 
 ## pyproject.toml
 

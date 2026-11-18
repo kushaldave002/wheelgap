@@ -28,7 +28,7 @@ uv run --group dev pytest
 | --- | --- |
 | `cli.py` | Command line: arguments, `[tool.wheelgap]` config, text / `--json` / `--markdown` output, exit codes |
 | `api.py` | Python API (`make_targets`, `check_package(s)`, `check_lockfile`) |
-| `sources.py` | Reads inputs: `uv.lock`, `pylock.toml`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`, `pixi.lock` (with a strict reader for the YAML subset pixi writes), requirements files |
+| `sources.py` | Reads inputs: `uv.lock`, `pylock.toml`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`, `pixi.lock` (with a strict reader for the YAML subset pixi writes), requirements files, conda `environment.yml` files (their `pip:` list, through that YAML reader's `comments=True` mode) |
 | `targets.py` | Targets (Python × platform) and the wheel tags each accepts |
 | `check.py` | The status per package and target (`wheel`, `source`, `missing`, `unknown`, `n/a`, `bundled`) and `--explain` reasons |
 | `pypi.py` | The only HTTP client (`fetch_json`: retries, https-only redirects; `fetch_sdist_pyproject` reads an sdist's `pyproject.toml` as pip would) and the PyPI lookups (`fill`, `fill_all`, `recheck_lock`) |

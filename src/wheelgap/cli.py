@@ -151,7 +151,8 @@ def make_parser() -> argparse.ArgumentParser:
         metavar="INPUT",
         help=(
             "uv.lock, pylock.toml, poetry.lock, Pipfile.lock, pixi.lock, requirements.txt, report.json, "
-            "pyproject.toml (direct dependencies), a directory, or package specs (default: .)"
+            "environment.yml (pip packages), pyproject.toml (direct dependencies), a directory, or package specs "
+            "(default: .)"
         ),
     )
     p.add_argument(
