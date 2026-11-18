@@ -38,6 +38,7 @@ from .check import (
     marker_holds,
     reachable,
 )
+from .codequality import write_codequality
 from .constraints import write_constraints
 from .deps import Resolver, pinned_complete, resolve_deps
 from .dockerfile import DockerfileError, read_dockerfile
@@ -254,8 +255,8 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--from-log",
         metavar="FILE",
-        help="read the packages a failed pip or uv install couldn't build from its log FILE (- for stdin) and check "
-        "them with --explain --suggest; needs -p and -t (or --dockerfile) for where the install ran",
+        help="read the packages a failed pip, uv, Poetry or PDM install couldn't build from its log FILE (- for stdin) "
+        "and check them with --explain --suggest; needs -p and -t (or --dockerfile) for where the install ran",
     )
     p.add_argument("--all", action="store_true", help="show every package, not just the ones with gaps")
     p.add_argument("--explain", action="store_true", help="for each gap, list the wheels that were rejected and why")
@@ -335,6 +336,11 @@ def make_parser() -> argparse.ArgumentParser:
         "--junit",
         metavar="PATH",
         help="also write a JUnit XML report to PATH, alongside the usual output",
+    )
+    p.add_argument(
+        "--gitlab-code-quality",
+        metavar="PATH",
+        help="also write a GitLab Code Quality JSON report to PATH for merge request findings",
     )
     p.add_argument(
         "--sarif",
@@ -1724,6 +1730,7 @@ def _main(argv: list[str], project: Path | None = None) -> int:
                 ("--dist", bool(args.dist)),
                 ("--junit", args.junit is not None),
                 ("--sarif", args.sarif is not None),
+                ("--gitlab-code-quality", args.gitlab_code_quality is not None),
                 ("--badge", args.badge is not None),
                 ("--write-constraints", args.write_constraints is not None),
                 ("--github-annotations", args.github_annotations),
@@ -2415,6 +2422,13 @@ def _main(argv: list[str], project: Path | None = None) -> int:
     if args.sarif is not None:  # an empty PATH is an error, as for --junit
         try:
             write_sarif(args.sarif, rows, targets, sources, fail_on, advisory)
+        except OSError as e:
+            print(f"wheelgap: error: {e}", file=sys.stderr)
+            return input_error_json(e) if args.json else 2
+
+    if args.gitlab_code_quality is not None:  # written even when the check fails; an empty PATH is an error
+        try:
+            write_codequality(args.gitlab_code_quality, rows, targets, sources, fail_on, advisory)
         except OSError as e:
             print(f"wheelgap: error: {e}", file=sys.stderr)
             return input_error_json(e) if args.json else 2

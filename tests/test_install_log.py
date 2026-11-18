@@ -1,4 +1,4 @@
-"""--from-log: the packages a failed pip or uv install log says didn't build become explained checks."""
+"""--from-log: the packages a failed pip, uv, Poetry or PDM install log says didn't build become explained checks."""
 
 import io
 import json
@@ -33,10 +33,142 @@ def log(name: str) -> str:
         ("gha-pip-mixed.log", [("forked", "1.0")]),
         # pip 25.2 and later: `× Failed to build installable wheels ...` with the names on the `╰─>` line.
         ("pip25-two-failed.log", [("fastlib", "2.0.0"), ("laggard", "1.0")]),
+        # Captured with Poetry 2.5.1 and PDM 2.29.7; see install-log-captures.md.
+        ("poetry-normal.log", [("pyaudio", "0.2.14")]),
+        ("poetry-verbose.log", [("pyaudio", "0.2.14")]),
+        ("pdm-verbose.log", [("pyaudio", "0.2.14")]),
     ],
 )
 def test_failed_builds(name, expected):
     assert failed_builds(log(name)) == expected
+
+
+POETRY_NOTE = (
+    "Note: This error originates from the build backend, and is likely not a problem with poetry but one of the "
+    "following issues with"
+)
+OTHER_PACKAGE_OUTPUT = ["Failed to build other_package", "  ✖ Install other_package 9.9 failed"]
+
+
+@pytest.mark.parametrize(
+    "name,line,prefix",
+    [
+        # What the backend writes to stderr is at column 0 in Poetry's log, as the BuildBackendWarning is.
+        ("poetry-normal.log", "/tmp/redacted BuildBackendWarning: License classifiers are deprecated.", ""),
+        # PDM -v prefixes the build's output with `pdm.termui: `.
+        ("pdm-verbose.log", "pdm.termui: building 'pyaudio._portaudio' extension", "pdm.termui: "),
+    ],
+)
+def test_project_tool_build_output_is_not_another_failed_package(name, line, prefix):
+    text = log(name)
+    assert line in text
+    text = text.replace(line, "\n".join([line, *(prefix + out for out in OTHER_PACKAGE_OUTPUT)]))
+    assert failed_builds(text) == [("pyaudio", "0.2.14")]
+
+
+def test_poetry_note_in_build_output_needs_an_operation_line():
+    # Build output at column 0 with Poetry's own header and note for a package no `  - Installing` line names.
+    line = "/tmp/redacted BuildBackendWarning: License classifiers are deprecated."
+    nested = f"PEP517 build of a dependency failed\n\n{POETRY_NOTE} other-package (9.9)\n"
+    text = log("poetry-normal.log").replace(line, f"{line}\n{nested}")
+    assert "other-package (9.9)" in text
+    assert failed_builds(text) == [("pyaudio", "0.2.14")]
+
+
+@pytest.mark.parametrize("operation", ["Updating pyaudio (0.2.13 -> 0.2.14)", "Downgrading pyaudio (0.3.0 -> 0.2.14)"])
+@pytest.mark.parametrize("status", ["", ": Failed", ": Pending..."])
+def test_poetry_update_operation_names_the_new_version(operation, status):
+    text = log("poetry-normal.log").replace("  - Installing pyaudio (0.2.14)", f"  - {operation}{status}")
+    assert failed_builds(text) == [("pyaudio", "0.2.14")]
+
+
+def test_poetry_note_for_another_version_than_the_operation_is_refused():
+    text = log("poetry-normal.log").replace("issues with pyaudio (0.2.14)", "issues with pyaudio (0.2.13)")
+    with pytest.raises(SourceError, match="Poetry"):
+        failed_builds(text)
+
+
+def test_project_tool_logs_in_colour():
+    poetry = (
+        log("poetry-normal.log")
+        .replace(
+            "  - Installing pyaudio (0.2.14)",
+            "  \x1b[34;1m-\x1b[39;22m Installing \x1b[36mpyaudio\x1b[39m (\x1b[39;1m0.2.14\x1b[39;22m): "
+            "\x1b[31;1mFailed\x1b[39;22m",
+        )
+        .replace("PEP517 build of a dependency failed", "\x1b[31;1mPEP517 build of a dependency failed\x1b[39;22m")
+    )
+    note = next(line for line in poetry.splitlines() if line.startswith("Note: "))
+    poetry = poetry.replace(note, f"\x1b[33m{note}\x1b[39m")
+    assert failed_builds(poetry) == [("pyaudio", "0.2.14")]
+    pdm = log("pdm-verbose.log").replace(
+        "  ✖ Install pyaudio 0.2.14 failed",
+        "  \x1b[31m✖\x1b[0m Install \x1b[1mpyaudio\x1b[0m \x1b[36m0.2.14\x1b[0m failed",
+    )
+    assert "\x1b[31m✖" in pdm
+    assert failed_builds(pdm) == [("pyaudio", "0.2.14")]
+
+
+@pytest.mark.parametrize("name", ["poetry-normal.log", "pdm-normal.log", "pdm-verbose.log"])
+def test_project_tool_incomplete_diagnostic_refuses_partial_results(name):
+    text = log("uv-ansi.log") + log(name)
+    if name.startswith("poetry"):
+        text = text.replace("issues with pyaudio (0.2.14)", "issues with pyaudio (not-a-version)")
+    else:
+        text = text.replace("pdm.exceptions.BuildError:", "pdm.exceptions.InstallationError:")
+    with pytest.raises(SourceError, match="Poetry|PDM"):
+        failed_builds(text)
+
+
+def test_pdm_failure_without_build_error_is_not_a_build_failure():
+    text = "  ✖ Install pyaudio 0.2.14 failed\nERRORS:\nadd pyaudio failed:\n"
+    text += "Traceback (most recent call last):\nOSError: download failed\n"
+    with pytest.raises(SourceError, match="PDM"):
+        failed_builds(text)
+
+
+def test_pdm_failure_without_install_version_is_refused():
+    text = log("pdm-normal.log").replace("  ✖ Install pyaudio 0.2.14 failed\n", "")
+    with pytest.raises(SourceError, match="PDM"):
+        failed_builds(text)
+
+
+def test_pdm_normal_output_cannot_distinguish_an_index_package_from_a_local_one():
+    with pytest.raises(SourceError, match="index source.*pdm install -v"):
+        failed_builds(log("pdm-normal.log"))
+
+
+@pytest.mark.parametrize(
+    "source,named",
+    [
+        ("https://private.example/simple/pyaudio/", "https://private.example/simple"),
+        ("https://user:secret@private.example/simple/pyaudio/", "https://private.example/simple"),
+        ("file:///local/pyaudio/", "file:///local/pyaudio"),
+    ],
+)
+def test_pdm_other_source_is_refused(source, named):
+    text = log("pdm-verbose.log").replace("https://pypi.org/simple/pyaudio/", source)
+    with pytest.raises(SourceError) as e:
+        failed_builds(text)
+    message = str(e.value)
+    assert f"another index than PyPI ({named})" in message
+    assert "--index-url" in message
+    assert "pdm install -v" not in message
+    assert "secret" not in message and "user" not in message
+
+
+def test_pdm_verbose_log_without_build_link_is_refused():
+    text = "\n".join(
+        line for line in log("pdm-verbose.log").splitlines() if "Running PEP 517 backend to build a wheel" not in line
+    )
+    with pytest.raises(SourceError, match="which index pyaudio 0.2.14 was built from") as e:
+        failed_builds(text)
+    assert "pdm install -v" not in str(e.value)
+
+
+def test_pdm_explicit_other_index_is_allowed():
+    text = log("pdm-verbose.log").replace("https://pypi.org/simple/pyaudio/", "https://private.example/simple/pyaudio/")
+    assert failed_builds(text, other_index=True) == [("pyaudio", "0.2.14")]
 
 
 @pytest.mark.parametrize(

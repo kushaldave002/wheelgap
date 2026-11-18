@@ -245,7 +245,7 @@ A wheel that would fit but whose release was yanked is named with the reason `ya
 
 ### `--from-log` {#from-log}
 
-`--from-log FILE` reads the log of a failed `pip install` or uv install (`-` reads stdin), finds the
+`--from-log FILE` reads a failed pip, uv, Poetry or PDM install log (`-` reads stdin), finds the
 packages that failed to build, and checks each one as `--explain --suggest` does: why no wheel fits, and the release
 that has one. The log doesn't say where the install ran, so pass `-p` and `-t` for that machine (or `--dockerfile` for
 a docker build); without them it's an error.
@@ -273,6 +273,27 @@ in links:` (`--find-links`, with or without `--no-index`) and wheelgap isn't giv
 `index-url` in `[tool.wheelgap]`, or `WHEELGAP_INDEX_URL`), when a failure line can't be read, or when more than 50
 packages failed. Colour codes and GitHub Actions timestamps are skipped, a UTF-16 log (PowerShell's `>`) is read too,
 and of a longer log only the last 8 MiB is read.
+
+Poetry 2.x logs (captured with 2.5.1; normal or `-v`) are read from Poetry's final build-backend note, `Note: This
+error originates from the build backend, ... issues with NAME (VERSION)`, after its `PEP517 build of a dependency
+failed` header. The backend's own output, which Poetry indents under `|` but can also print at column 0 (what the
+backend writes to stderr), can't be told apart from Poetry's lines, so the note counts only when an earlier Poetry
+operation line names the same package and version, `- Installing NAME (VERSION)` or `- Updating NAME (OLD -> NEW)` (and
+`Downgrading`) for NEW. Poetry's note doesn't name the index, so, as with uv, pass the index the install used with
+`--index-url` when it wasn't PyPI.
+
+PDM logs (captured with 2.29.7) need `pdm install -v`: normal output prints the same name and version for an index,
+URL or local-path dependency, so it's refused with a request to rerun with `-v`. In verbose output the failure counts
+only with all three: PDM's `✖ Install NAME VERSION failed` line, its `Error occurs adding NAME:` with a
+`pdm.exceptions.BuildError` traceback, and the `Running PEP 517 backend to build a wheel for <Link ... (from URL)>`
+line that says which index the sdist came from. A download or other install error is refused rather than reported as a
+build failure, and a package built from another index than PyPI is an error that names the index, unless wheelgap is
+given that index with `--index-url`.
+
+Not read, so they give an error rather than a guess: Poetry 1.x logs, whose `ChefBuildError` diagnostics differ (`found
+no package that failed to build`); a PDM sync that updates a package, whose failure line is `✖ Update NAME OLD -> NEW
+failed`; and a PDM log from a console that can't print Unicode, where PDM writes `x` instead of `✖`. Other Poetry and
+PDM versions whose diagnostics differ are refused too.
 
 A note lists the packages the log says failed, and another says when one has a wheel for a checked target after all:
 then the log likely comes from another platform or Python than `-p` and `-t`. `--no-suggest` turns `--suggest` off.
@@ -388,7 +409,7 @@ snippet; when no gap wheel fits, stdout is empty.
 
 It refuses, with exit code 2 and before any lookup, more than one input and any other input: `pyproject.toml`,
 `pylock.toml`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`, `pixi.lock`, a pip report and an `environment.yml`. Use
-`--fix` alone for those. It can't be used with `--explain` (and its add-ons), `--all`, `--from-log`, `--dist`, `--json`, `--markdown`, `--junit`, `--sarif`, `--badge`,
+`--fix` alone for those. It can't be used with `--explain` (and its add-ons), `--all`, `--from-log`, `--dist`, `--json`, `--markdown`, `--junit`, `--sarif`, `--gitlab-code-quality`, `--badge`,
 `--write-constraints` or `--github-annotations`.
 
 ```console
@@ -421,6 +442,12 @@ a pull request comment. See [Output](output.md#markdown).
 [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) report to `PATH`, alongside the usual
 output, for GitHub code scanning. It's written even when the check fails, and an empty `PATH` is an error, as for
 `--junit`. See [Output](output.md#sarif) and [CI](ci.md#code-scanning).
+
+### `--gitlab-code-quality` {#gitlab-code-quality}
+
+`--gitlab-code-quality PATH`: also write a GitLab Code Quality JSON report to `PATH`, alongside the usual output,
+even when the check fails. An empty `PATH` is an error. See [Output](output.md#gitlab-code-quality) and
+[GitLab CI](ci.md#gitlab-ci).
 
 ### `--badge` {#badge}
 

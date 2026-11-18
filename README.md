@@ -51,7 +51,7 @@ wheelgap -p 3.14t -t all
 # Several Pythons at once, Linux on both architectures
 wheelgap uv.lock -p 3.12,3.13,3.14 -t linux-x86_64,linux-aarch64
 
-# Diagnose failed pip or uv wheel builds
+# Diagnose failed pip, uv, Poetry or PDM (-v) wheel builds
 wheelgap --from-log pip-install.log -p 3.13 -t win-arm64
 
 # Resolve a version range separately for each Python
@@ -141,7 +141,7 @@ Python versions take a trailing `t` for free-threaded builds (`3.14t`). `--glibc
     args: uv.lock -p 3.13 -t linux-x86_64,linux-aarch64
 ```
 
-The job fails when a dependency would build from source on a target you ship, for example when a dependency bump drops ARM wheels. The gap table also goes to the run's summary page (set `summary: false` to turn that off). `compare-to: base` fails only when a pull request makes the lockfile worse, and `comment: true` posts the result on the pull request ([details and permissions](https://wheelgap.github.io/wheelgap/ci/#compare-to)). For a release workflow, `dist: dist` runs `--dist` on the files about to be uploaded and fails when the release drops a platform's wheels. [CI](https://wheelgap.github.io/wheelgap/ci/) covers the Action, `--markdown`, `--junit`, `--sarif` and GitLab.
+The job fails when a dependency would build from source on a target you ship, for example when a dependency bump drops ARM wheels. The gap table also goes to the run's summary page (set `summary: false` to turn that off). `compare-to: base` fails only when a pull request makes the lockfile worse, and `comment: true` posts the result on the pull request ([details and permissions](https://wheelgap.github.io/wheelgap/ci/#compare-to)). For a release workflow, `dist: dist` runs `--dist` on the files about to be uploaded and fails when the release drops a platform's wheels. [CI](https://wheelgap.github.io/wheelgap/ci/) covers the Action, `--markdown`, `--junit`, `--sarif` and `--gitlab-code-quality` for GitLab merge request findings.
 
 ## With pre-commit
 

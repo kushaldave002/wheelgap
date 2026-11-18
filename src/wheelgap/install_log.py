@@ -1,4 +1,4 @@
-"""--from-log: the packages a failed pip or uv install log says didn't build, with the version the log gives each.
+"""--from-log: the packages a failed pip, uv, Poetry or PDM install log says didn't build, with their logged versions.
 
 The log is untrusted text. Only a few exact message shapes count, and a failure that can't be read is an error, never
 a guess.
@@ -67,6 +67,24 @@ _PIP_SUMMARY = re.compile(r"(?:ERROR: )?Failed to build ([^`'\"]+)$")
 # never in a build's output.
 _UV = re.compile(r"\s*(?:×|├─▶|╰─▶|error:|Caused by:)\s*Failed to (?:download and )?build:? `([^`]*)`")
 _UV_NAME_VERSION = re.compile(rf"({_NAME})(?:==(\S+))?")
+# Captured with Poetry 2.5.1 and PDM 2.29.7, normal and -v (tests/fixtures/install-log-captures.md).
+# Poetry prefixes most backend output with `    | `, but what the backend writes to stderr is at column 0, so its
+# final note counts only for a package and version one of Poetry's operation lines names earlier in the log:
+# `  - Installing NAME (VERSION)`, or `  - Updating NAME (OLD -> NEW)` (and `Downgrading`) for NEW, with a trailing
+# status (`: Pending...`, `: Failed`) when the console is a terminal.
+_POETRY_NOTE = (
+    "Note: This error originates from the build backend, and is likely not a problem with poetry "
+    "but one of the following issues with "
+)
+_POETRY_PACKAGE = re.compile(rf"({_NAME}) \((.+)\)$")
+_POETRY_OPERATION = re.compile(
+    rf"  - (?:Installing ({_NAME}) \(([^()]+)\)|(?:Updating|Downgrading) ({_NAME}) \([^()]+ -> ([^()]+)\))"
+    r"(?:: (?:Pending|Installing|Updating|Downgrading|Downloading|Preparing|Building|Failed)\b.*)?\s*$"
+)
+# A PDM install can fail for reasons other than building: require its named exception traceback as well.
+_PDM_INSTALL = re.compile(rf"  ✖ Install ({_NAME}) (\S+) failed\s*$")
+_PDM_ERROR = re.compile(rf"(?:add ({_NAME}) failed:|pdm\.termui: Error occurs adding ({_NAME}):)\s*$")
+_PDM_SOURCE = re.compile(r"pdm\.termui: Running PEP 517 backend to build a wheel for <Link (\S+) \(from (\S+)\)>\s*$")
 
 _UNCLEAR = "unclear"  # the log collects the package again without a version after naming one
 _DIRECT = "direct"  # the log installs the package from a URL or a path, not from an index
@@ -110,10 +128,14 @@ def _decode(f: BinaryIO) -> str:
 
 def failed_builds(text: str, other_index: bool = False) -> list[tuple[str, str]]:
     """The (name, version) of each package the log says failed to build, in the order the log names them. The version
-    is the one uv names, else the one the `Collecting`, `Downloading` and `Using cached` lines since the package's last
-    `Collecting` line name, in the same pip run (a run ends at `Successfully installed`). A failure whose version the
-    log doesn't make clear is an error, and so is a pip log that used another index than PyPI or --find-links, unless
-    `other_index` (wheelgap itself checks another index, as with --index-url)."""
+    is the one uv names; for pip, the one the `Collecting`, `Downloading` and `Using cached` lines since the package's
+    last `Collecting` line name, in the same pip run (a run ends at `Successfully installed`); for Poetry, the one its
+    build-backend note names, if an earlier `Installing`/`Updating`/`Downgrading` line names it too; and for PDM
+    (`pdm install -v` only), the one its `✖ Install NAME VERSION failed` line names, with a `BuildError` traceback for
+    that package and the build link that says which index the sdist came from. A failure whose version the log doesn't
+    make clear is an error, and so is a log that used another index than PyPI or --find-links (pip), or that built the
+    package from another index (PDM), unless `other_index` (wheelgap itself checks another index, as with
+    --index-url)."""
     # canonical name -> the versions named since its last `Collecting` line (Version -> as written), or _UNCLEAR,
     # _DIRECT or _EARLIER
     versions: dict[str, dict[Version, str] | str] = {}
@@ -122,6 +144,14 @@ def failed_builds(text: str, other_index: bool = False) -> list[tuple[str, str]]
     backtracked: str | None = None
     built: set[str] = set()  # names pip printed `Building wheel for` or `Failed building wheel for` for
     failures: dict[str, tuple[str, str]] = {}
+    poetry_build = False
+    poetry_operations: dict[str, set[str]] = {}  # canonical name -> the versions Poetry's operation lines name
+    pdm_versions: dict[str, set[str]] = {}
+    pdm_sources: dict[str, set[Version]] = {}
+    pdm_other_sources: dict[str, str] = {}  # canonical name -> the index (or other source) it was built from instead
+    pdm_verbose = False  # `pdm install -v`: its own lines start with `pdm.termui: `
+    pdm_error: str | None = None
+    pdm_traceback = False
 
     def failed(name: str, version: str | None) -> None:
         key = canonicalize_name(name)
@@ -198,6 +228,70 @@ def failed_builds(text: str, other_index: bool = False) -> list[tuple[str, str]]
     for line in _ANSI.sub("", text).splitlines():
         if m := _TIMESTAMP.match(line):
             line = line[m.end() :]
+        if line.startswith("Synchronizing working set with resolved packages:"):
+            pdm_versions.clear()
+            pdm_sources.clear()
+            pdm_other_sources.clear()
+        if line.startswith("pdm.termui: "):
+            pdm_verbose = True
+        if m := _PDM_SOURCE.fullmatch(line):
+            if found := _file_version(m.group(1)):
+                source_key = canonicalize_name(found[0])
+                if m.group(2).rstrip("/") == f"{_PYPI_SIMPLE}/{source_key}" or other_index:
+                    pdm_sources.setdefault(source_key, set()).add(Version(found[1]))
+                else:
+                    pdm_other_sources[source_key] = _pdm_index(m.group(2), source_key)
+        if m := _POETRY_OPERATION.fullmatch(line):
+            poetry_operations.setdefault(canonicalize_name(m.group(1) or m.group(3)), set()).add(
+                m.group(2) or m.group(4)
+            )
+        if line == "PEP517 build of a dependency failed":
+            poetry_build = True
+        if line.startswith(_POETRY_NOTE) and (candidate := _POETRY_PACKAGE.fullmatch(line.removeprefix(_POETRY_NOTE))):
+            # A note for a package no operation line names is the backend's own output, not Poetry's.
+            if (operations := poetry_operations.get(canonicalize_name(candidate.group(1)))) is not None:
+                note_version = candidate.group(2)
+                if (
+                    not poetry_build
+                    or not _is_version(note_version)
+                    or not any(_is_version(v) and Version(v) == Version(note_version) for v in operations)
+                ):
+                    raise SourceError("--from-log: can't read Poetry's failed package and version; refusing to guess")
+                failed(candidate.group(1), candidate.group(2))
+                poetry_build = False
+        if m := _PDM_INSTALL.fullmatch(line):
+            pdm_versions.setdefault(canonicalize_name(m.group(1)), set()).add(m.group(2))
+        if m := _PDM_ERROR.fullmatch(line):
+            if pdm_error is not None:
+                raise SourceError("--from-log: PDM's install failure is not a clear build failure; refusing to guess")
+            pdm_error = m.group(1) or m.group(2)
+            pdm_traceback = False
+        elif pdm_error is not None and line == "Traceback (most recent call last):":
+            pdm_traceback = True
+        elif pdm_error is not None and line.startswith("pdm.exceptions.BuildError: Build backend raised error:"):
+            seen = pdm_versions.get(canonicalize_name(pdm_error), set())
+            if not pdm_traceback or len(seen) != 1 or not all(_is_version(v) for v in seen):
+                raise SourceError("--from-log: can't read PDM's failed package and version; refusing to guess")
+            version = next(iter(seen))
+            error_key = canonicalize_name(pdm_error)
+            if pdm_sources.get(error_key) != {Version(version)}:
+                if error_key in pdm_other_sources:
+                    raise SourceError(
+                        f"--from-log: PDM built {pdm_error} from another index than PyPI "
+                        f"({_USERINFO.sub('//', pdm_other_sources[error_key])}), so it may not be PyPI's; pass that "
+                        "index with --index-url to check it"
+                    )
+                if pdm_verbose:
+                    raise SourceError(
+                        f"--from-log: PDM's log doesn't say which index {pdm_error} {version} was built from; "
+                        "refusing to guess"
+                    )
+                raise SourceError(
+                    "--from-log: PDM's log doesn't identify the failed package's index source; rerun pdm install -v "
+                    "(normal output also hides URL and path dependencies); refusing to guess"
+                )
+            failed(pdm_error, version)
+            pdm_error = None
         if diagnostic is not None:
             if not line.strip():
                 continue
@@ -260,13 +354,26 @@ def failed_builds(text: str, other_index: bool = False) -> list[tuple[str, str]]
             pip_summary(m.group(1).split())
     if diagnostic:
         raise SourceError("--from-log: can't read pip's list of packages that failed to build; refusing to guess")
+    if poetry_build:
+        raise SourceError("--from-log: can't read Poetry's failed package and version; refusing to guess")
+    if pdm_error is not None:
+        raise SourceError("--from-log: PDM's install failure is not a clear build failure; refusing to guess")
 
     if not failures:
         raise SourceError(
             "--from-log: found no package that failed to build (pip's `Failed to build NAME` or uv's "
-            "``Failed to build `NAME==VERSION` ``)"
+            "``Failed to build `NAME==VERSION` ``, or a supported Poetry/PDM build diagnostic)"
         )
     return list(failures.values())
+
+
+def _pdm_index(url: str, key: str) -> str:
+    """The index a PDM build link's `(from URL)` names: the URL without its last path segment when that is the
+    package's project page (`https://example.com/simple/NAME/`), else the URL as it is."""
+    base, _, last = url.rstrip("/").rpartition("/")
+    if url.startswith(("https://", "http://")) and base.count("/") > 2 and canonicalize_name(last) == key:
+        return base
+    return url.rstrip("/")
 
 
 def _file_version(location: str) -> tuple[str, str] | None:
