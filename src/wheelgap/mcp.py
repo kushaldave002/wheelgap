@@ -942,6 +942,9 @@ def _suggest_targets(args: dict[str, Any]) -> dict[str, Any]:
         raise ToolError(str(e)) from e
     # Reasons can quote a workflow's or Dockerfile's text: keep what reaches the model bounded.
     found.unreadable = [dataclasses.replace(u, reason=_clip(u.reason)) for u in found.unreadable]
+    # What a file names (a FROM line, a container image) reaches the model too: bound it the same way.
+    found.targets = [dataclasses.replace(f, source=_clip(f.source)) for f in found.targets]
+    found.pythons = [dataclasses.replace(f, source=_clip(f.source)) for f in found.pythons]
     return to_json(found)
 
 
@@ -954,7 +957,8 @@ def _root_or_home(folder: Path) -> bool:
         home = Path.home().resolve()
     except (OSError, RuntimeError, KeyError):  # no home folder to be found
         home = None
-    return resolved == Path(resolved.anchor) or resolved == home
+    # The filesystem root, the home folder, or a folder above it (/Users, /home): each walks other people's projects.
+    return resolved == Path(resolved.anchor) or (home is not None and home.is_relative_to(resolved))
 
 
 def _list_targets(args: dict[str, Any]) -> dict[str, Any]:

@@ -12,7 +12,7 @@ from test_deps import INDEX, LINUX, WIN_AMD, WIN_ARM, index, release  # noqa: F4
 from test_dist import LINUX_WHEEL, SDIST, WIN_ARM_WHEEL, dist
 
 from wheelgap import __version__, cli, mcp
-from wheelgap.suggest_targets import Suggestions, Unreadable
+from wheelgap.suggest_targets import Found, Suggestions, Unreadable
 
 
 def run(*messages: object, raw: bytes = b"") -> list:
@@ -1262,7 +1262,7 @@ def test_suggest_targets_refuses_the_filesystem_root_and_home_folder(tmp_path, m
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setattr(mcp.Path, "home", staticmethod(lambda: home))
-    for folder in (Path(tmp_path.anchor), home):
+    for folder in (Path(tmp_path.anchor), home, tmp_path):  # tmp_path holds home: a folder above it
         (_, reply) = run(init(), call("suggest_targets", path=str(folder)))
         assert reply["result"]["isError"] is True
         assert "pass the project folder, not / or your home folder" in reply["result"]["content"][0]["text"]
@@ -1277,6 +1277,18 @@ def test_suggest_targets_clips_unreadable_reasons(tmp_path, monkeypatch):
     (_, reply) = run(init(), call("suggest_targets", path=str(tmp_path)))
     (item,) = reply["result"]["structuredContent"]["unreadable"]
     assert item == {"file": "Dockerfile", "line": 1, "reason": "x" * 197 + "..."}
+
+
+def test_suggest_targets_clips_what_a_file_names(tmp_path, monkeypatch):
+    long = "FROM python:3.13@" + "a" * 1000
+    found = Suggestions(
+        targets=[Found("linux-x86_64", "Dockerfile", 1, long)], pythons=[Found("3.13", "Dockerfile", 1, long)]
+    )
+    monkeypatch.setattr(mcp, "suggest", lambda folder: found)
+    (_, reply) = run(init(), call("suggest_targets", path=str(tmp_path)))
+    content = reply["result"]["structuredContent"]
+    assert [t["from"] for t in content["targets"]] == [long[:197] + "..."]
+    assert [p["from"] for p in content["python"]] == [long[:197] + "..."]
 
 
 @pytest.mark.parametrize("modern", [False, True])

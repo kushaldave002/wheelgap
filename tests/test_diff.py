@@ -4,6 +4,7 @@ import subprocess
 import sys
 
 import pytest
+from conftest import FAKE_INDEX
 
 from wheelgap.api import Result, make_targets
 from wheelgap.check import Status
@@ -124,6 +125,52 @@ def test_diff_macos_flag_counts_a_wheel_above_the_floor(fake_pypi, tmp_path, cap
         "  macos-arm64: ✓ → ● source",
         "1 package got worse.",
     ]
+
+
+def test_diff_ios_flag_counts_a_wheel_above_the_floor(fake_pypi, tmp_path, capsys, monkeypatch):
+    # The new release's only iOS wheel is ios_15_0, above the default 13.0 floor.
+    monkeypatch.setitem(
+        FAKE_INDEX,
+        "ioslag",
+        {
+            "1.0": ["ioslag-1.0-cp313-cp313-ios_13_0_arm64_iphoneos.whl", "ioslag-1.0.tar.gz"],
+            "1.1": ["ioslag-1.1-cp313-cp313-ios_15_0_arm64_iphoneos.whl", "ioslag-1.1.tar.gz"],
+        },
+    )
+    old, new = write_pair(tmp_path, "ioslag==1.0\n", "ioslag==1.1\n")
+    assert main([old, new, "-p", "3.13", "-t", "ios-arm64"]) == 1
+    assert capsys.readouterr().out.splitlines() == [
+        "ioslag 1.0 → 1.1",
+        "  ios-arm64: ✓ → ✗ missing",
+        "1 package got worse.",
+    ]
+    assert main([old, new, "-p", "3.13", "-t", "ios-arm64", "--ios", "15.0"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["Nothing got worse."]
+    assert main([old, new, "-p", "3.13", "-t", "ios-arm64", "--ios", "not-a-version"]) == 2
+    assert "wheelgap: error:" in capsys.readouterr().err
+
+
+def test_diff_android_api_flag_counts_a_wheel_above_the_floor(fake_pypi, tmp_path, capsys, monkeypatch):
+    # The new release's only Android wheel is android_26, above the default API 24 floor.
+    monkeypatch.setitem(
+        FAKE_INDEX,
+        "androidlag",
+        {
+            "1.0": ["androidlag-1.0-cp313-cp313-android_24_arm64_v8a.whl", "androidlag-1.0.tar.gz"],
+            "1.1": ["androidlag-1.1-cp313-cp313-android_26_arm64_v8a.whl", "androidlag-1.1.tar.gz"],
+        },
+    )
+    old, new = write_pair(tmp_path, "androidlag==1.0\n", "androidlag==1.1\n")
+    assert main([old, new, "-p", "3.13", "-t", "android-arm64"]) == 1
+    assert capsys.readouterr().out.splitlines() == [
+        "androidlag 1.0 → 1.1",
+        "  android-arm64: ✓ → ✗ missing",
+        "1 package got worse.",
+    ]
+    assert main([old, new, "-p", "3.13", "-t", "android-arm64", "--android-api", "26"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["Nothing got worse."]
+    assert main([old, new, "-p", "3.13", "-t", "android-arm64", "--android-api", "abc"]) == 2
+    assert "wheelgap: error:" in capsys.readouterr().err
 
 
 def test_diff_distro_supplies_the_libc_version(fake_pypi, tmp_path, capsys):
