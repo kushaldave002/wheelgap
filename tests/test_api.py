@@ -464,9 +464,9 @@ def test_check_lockfile_refuses_a_script_without_deps(fake_pypi, tmp_path):
 
 
 def test_check_lockfile_missing_script_says_so(fake_pypi, tmp_path):
-    with pytest.raises(SourceError) as info:
+    # Like any other missing input, not "a script's block lists direct dependencies only".
+    with pytest.raises(FileNotFoundError):
         wheelgap.check_lockfile(tmp_path / "missing.py")
-    assert "direct dependencies only" not in str(info.value)
     assert not fake_pypi
 
 
