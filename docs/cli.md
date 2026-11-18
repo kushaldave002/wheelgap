@@ -273,9 +273,9 @@ and of a longer log only the last 8 MiB is read.
 
 Poetry 2.x logs (captured with 2.5.1; normal or `-v`) are read from Poetry's final build-backend note, `Note: This
 error originates from the build backend, ... issues with NAME (VERSION)`, after its `PEP517 build of a dependency
-failed` header. Only Poetry's own error lines count, not the backend's output, which Poetry indents under `|` but can
-also be at column 0 (what the backend writes to stderr): the note counts only when an earlier Poetry operation line
-names the same package and version, `- Installing NAME (VERSION)` or `- Updating NAME (OLD -> NEW)` (and
+failed` header. The backend's own output, which Poetry indents under `|` but can also print at column 0 (what the
+backend writes to stderr), can't be told apart from Poetry's lines, so the note counts only when an earlier Poetry
+operation line names the same package and version, `- Installing NAME (VERSION)` or `- Updating NAME (OLD -> NEW)` (and
 `Downgrading`) for NEW. Poetry's note doesn't name the index, so, as with uv, pass the index the install used with
 `--index-url` when it wasn't PyPI.
 
