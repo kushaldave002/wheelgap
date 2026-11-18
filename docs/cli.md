@@ -245,7 +245,7 @@ A wheel that would fit but whose release was yanked is named with the reason `ya
 
 ### `--from-log` {#from-log}
 
-`--from-log FILE` reads the log of a failed `pip install` or uv install (`-` reads stdin), finds the
+`--from-log FILE` reads a failed pip, uv, Poetry or PDM install log (`-` reads stdin), finds the
 packages that failed to build, and checks each one as `--explain --suggest` does: why no wheel fits, and the release
 that has one. The log doesn't say where the install ran, so pass `-p` and `-t` for that machine (or `--dockerfile` for
 a docker build); without them it's an error.
@@ -273,6 +273,27 @@ in links:` (`--find-links`, with or without `--no-index`) and wheelgap isn't giv
 `index-url` in `[tool.wheelgap]`, or `WHEELGAP_INDEX_URL`), when a failure line can't be read, or when more than 50
 packages failed. Colour codes and GitHub Actions timestamps are skipped, a UTF-16 log (PowerShell's `>`) is read too,
 and of a longer log only the last 8 MiB is read.
+
+Poetry 2.x logs (captured with 2.5.1; normal or `-v`) are read from Poetry's final build-backend note, `Note: This
+error originates from the build backend, ... issues with NAME (VERSION)`, after its `PEP517 build of a dependency
+failed` header. The backend's own output, which Poetry indents under `|` but can also print at column 0 (what the
+backend writes to stderr), can't be told apart from Poetry's lines, so the note counts only when an earlier Poetry
+operation line names the same package and version, `- Installing NAME (VERSION)` or `- Updating NAME (OLD -> NEW)` (and
+`Downgrading`) for NEW. Poetry's note doesn't name the index, so, as with uv, pass the index the install used with
+`--index-url` when it wasn't PyPI.
+
+PDM logs (captured with 2.29.7) need `pdm install -v`: normal output prints the same name and version for an index,
+URL or local-path dependency, so it's refused with a request to rerun with `-v`. In verbose output the failure counts
+only with all three: PDM's `✖ Install NAME VERSION failed` line, its `Error occurs adding NAME:` with a
+`pdm.exceptions.BuildError` traceback, and the `Running PEP 517 backend to build a wheel for <Link ... (from URL)>`
+line that says which index the sdist came from. A download or other install error is refused rather than reported as a
+build failure, and a package built from another index than PyPI is an error that names the index, unless wheelgap is
+given that index with `--index-url`.
+
+Not read, so they give an error rather than a guess: Poetry 1.x logs, whose `ChefBuildError` diagnostics differ (`found
+no package that failed to build`); a PDM sync that updates a package, whose failure line is `✖ Update NAME OLD -> NEW
+failed`; and a PDM log from a console that can't print Unicode, where PDM writes `x` instead of `✖`. Other Poetry and
+PDM versions whose diagnostics differ are refused too.
 
 A note lists the packages the log says failed, and another says when one has a wheel for a checked target after all:
 then the log likely comes from another platform or Python than `-p` and `-t`. `--no-suggest` turns `--suggest` off.
@@ -494,11 +515,11 @@ the platforms as JSON. Can't be combined with `--markdown`.
 ### `--suggest-targets` {#suggest-targets}
 
 `--suggest-targets [DIR]`: read the platforms and Pythons that `DIR` (default: the current directory)
-already names in its GitHub Actions workflows and Dockerfiles, print each with the file and line it came from, then a
-`[tool.wheelgap]` snippet to paste into `pyproject.toml`. It only suggests: nothing is changed or checked, and it exits
-0. With `--json`, it prints the same as an object. It can't be combined with `-p`, `-t`, `--dockerfile`, `--build-arg`,
-`--list-targets`, `--markdown` or input files, and a `DIR` that isn't a folder exits 2. What it can't read for sure is
-listed with its file and line rather than guessed. See
+already names in its GitHub Actions workflows, `.gitlab-ci.yml` and Dockerfiles, print each with the file and line it
+came from, then a `[tool.wheelgap]` snippet to paste into `pyproject.toml`. It only suggests: nothing is changed or
+checked, and it exits 0. With `--json`, it prints the same as an object. It can't be combined with `-p`, `-t`,
+`--dockerfile`, `--build-arg`, `--list-targets`, `--markdown` or input files, and a `DIR` that isn't a folder exits 2.
+What it can't read for sure is listed with its file and line rather than guessed. See
 [Suggest targets from your CI and Dockerfiles](targets.md#suggest-targets).
 
 ### `-V`, `--version` {#version}

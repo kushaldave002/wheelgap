@@ -54,7 +54,7 @@ wheelgap uv.lock -p 3.12,3.13,3.14 -t linux-x86_64,linux-aarch64
 # Check what a single-file script installs (PEP 723)
 wheelgap example.py --deps -t win-arm64
 
-# Diagnose failed pip or uv wheel builds
+# Diagnose failed pip, uv, Poetry or PDM (-v) wheel builds
 wheelgap --from-log pip-install.log -p 3.13 -t win-arm64
 
 # Resolve a version range separately for each Python
@@ -96,7 +96,7 @@ python = ["3.13", "3.14t"]
 targets = ["linux-x86_64", "linux-aarch64", "musl-aarch64"]
 ```
 
-Not sure what to put there? `wheelgap --suggest-targets` reads the platforms your CI and Dockerfiles already name and suggests these lines ([how](https://wheelgap.github.io/wheelgap/targets/#suggest-targets)).
+Not sure what to put there? `wheelgap --suggest-targets` reads the platforms your GitHub Actions, GitLab CI and Dockerfiles already name and suggests these lines ([how](https://wheelgap.github.io/wheelgap/targets/#suggest-targets)).
 
 Each cell in the table is one of:
 

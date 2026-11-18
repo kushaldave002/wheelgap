@@ -62,7 +62,7 @@ All seven are read-only. Package checks look packages up on PyPI, or on the inde
   agent that bumps dependencies can save the old lockfile under its own name
   (`mkdir -p /tmp/old && git show HEAD:uv.lock > /tmp/old/uv.lock`) and ask
   whether the upgrade lost a wheel.
-- `suggest_targets`: read the project's GitHub Actions workflows and Dockerfiles,
+- `suggest_targets`: read the project's GitHub Actions workflows, `.gitlab-ci.yml` and Dockerfiles,
   returning `targets`, `python`, `unreadable` and suggested `config`, as
   `wheelgap --suggest-targets --json` does. Each finding names its file and line.
   Nothing is changed or checked; confirm the suggested platforms with the user
