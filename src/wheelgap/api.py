@@ -476,7 +476,7 @@ def _check_lockfile(
         kind: str | None = file_kind(lockfile)
     except SourceError:
         kind = None  # load_file says why (no such file, or a name it can't read)
-    if kind in ("pyproject", "script") and not deps:
+    if kind in ("pyproject", "script") and not deps and lockfile.is_file():
         what = "a pyproject.toml" if kind == "pyproject" else "a script's # /// script block"
         raise SourceError(
             f"{lockfile}: {what} lists direct dependencies only, so check_lockfile() and "

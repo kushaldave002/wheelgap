@@ -388,7 +388,7 @@ def test_uv_way_for_a_script_goes_in_its_script_block(capsys, fake_pypi, gap_whe
         "wheelgap's gap wheel index has wheels PyPI lacks for:\n"
         "  nowheels 0.9: win-arm64\n"
         "\n"
-        "To install them with uv run, add this inside example.py's # /// script block:\n"
+        "To install them with uv run, add this at the end of example.py's # /// script block:\n"
         "\n"
         "# [[tool.uv.index]]\n"
         '# name = "wheelgap"\n'
@@ -410,14 +410,14 @@ def test_script_fix_says_to_list_a_transitive_package_and_renders_in_markdown():
     fill = _fill("script", "example.py", ["parent", "x"])
     fill.source.specs.append("parent>=1")
     text = gapwheels.text_lines([fill], False)
-    assert "To install them with uv run, add this inside example.py's # /// script block:" in text
+    assert "To install them with uv run, add this at the end of example.py's # /// script block:" in text
     assert '# x = { index = "wheelgap" }' in text
     assert (
         'uv only applies [tool.uv.sources] to a script\'s own dependencies, so also list "x" in its dependencies.'
     ) in text
     assert not any("pins each file" in line for line in text)
     md = "\n".join(gapwheels.markdown_lines([fill], False))
-    assert "add this inside `example.py`'s `# /// script` block:\n\n```python\n# [[tool.uv.index]]\n" in md
+    assert "add this at the end of `example.py`'s `# /// script` block:\n\n```python\n# [[tool.uv.index]]\n" in md
     assert '- uv only applies `[tool.uv.sources]` to a script\'s own dependencies, so also list `"x"`' in md
     assert "pins each file" not in md
     fill.source.specs.append("x==1")  # listed in the block: no note

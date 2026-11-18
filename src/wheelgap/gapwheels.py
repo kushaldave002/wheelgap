@@ -411,7 +411,8 @@ def text_lines(fills: list[Fill], multi_py: bool) -> list[str]:
             PIP_CAVEAT,
         ]
     for label, lines, script_notes in _script_parts(fills):
-        out += ["", f"To install them with uv run, add this inside {label}'s # /// script block:", "", *lines, ""]
+        where = f"add this at the end of {label}'s # /// script block:"
+        out += ["", f"To install them with uv run, {where}", "", *lines, ""]
         out += [f"{note}." for note in script_notes]
         out.append(SCRIPT_MERGE)
     if locks := _lock_kinds(fills):
@@ -461,7 +462,7 @@ def markdown_lines(fills: list[Fill], multi_py: bool) -> list[str]:
             "",
         ]
     for label, lines, script_notes in _script_parts(fills, _code):
-        out += [f"To install them with `uv run`, add this inside `{label}`'s `# /// script` block:", ""]
+        out += [f"To install them with `uv run`, add this at the end of `{label}`'s `# /// script` block:", ""]
         out += ["```python", *lines, "```", ""]
         out += [f"- {note}." for note in script_notes]
         if script_notes:

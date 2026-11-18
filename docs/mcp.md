@@ -30,8 +30,8 @@ All six are read-only. They look packages up on PyPI, or on the index in
   settings included: the packages with gaps, the ones it skipped (git, path and
   private-index packages, which aren't checked) and any notes. It also returns
   `blocking_newer_python` when two Pythons, one newer, are checked. With
-  `dependencies: true`, requirements files and `pyproject.toml`
-  are resolved as `--deps` would, including transitive gaps, each with `via`
+  `dependencies: true`, requirements files, `pyproject.toml` and a script's
+  `# /// script` block are resolved as `--deps` would, including transitive gaps, each with `via`
   (the path to it on each gap target) and `direct` (the direct dependencies
   behind it). It's refused where `--deps` is: lockfiles, offline, and another
   index.
@@ -128,7 +128,7 @@ for `check_dist` the nearest folder above the dist folder with a
 | `macos` | string | `[tool.wheelgap] macos`, else `14.0` | Oldest macOS version to support. |
 | `pyodide_lock` | string | `[tool.wheelgap] pyodide-lock` (when a pyodide target is checked) | Absolute path or https URL of a Pyodide release's `pyodide-lock.json`. |
 | `offline` | boolean | `[tool.wheelgap] offline`, else `false` | Use only the files recorded in the lockfile; never contact the index. `true` turns it on; `offline = true` in the project can't be turned off from here. |
-| `dependencies` | boolean | `false` | Resolve transitive dependencies of requirements files and `pyproject.toml` with `--deps`; each gap gets `via` and `direct`. Refused for lockfiles, offline and another index. |
+| `dependencies` | boolean | `false` | Resolve transitive dependencies of requirements files, `pyproject.toml` and a script's `# /// script` block with `--deps`; each gap gets `via` and `direct`. Refused for lockfiles, offline and another index. |
 
 #### `check_dockerfile`
 
