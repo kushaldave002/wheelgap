@@ -5,6 +5,7 @@ import json
 import re
 import urllib.error
 from collections import Counter
+from threading import Barrier
 
 import pytest
 from packaging.requirements import Requirement
@@ -57,6 +58,7 @@ INDEX = {
     "pa": {"1.0": release(["pc>=2.0b1"])},
     "pb": {"1.0": release(["pc"])},
     "pc": {"1.0": release(), "2.0": release(), "2.1b1": release()},
+    "urldep": {"1.0": release(["c @ https://files.example/c-1.0.tar.gz"])},  # c from a direct URL
     # noarm 2.0 has only a Linux wheel and no sdist, so pip on Windows on ARM installs 1.0; nowhere never installs.
     "noarm": {"1.0": release(files=(WIN_ARM,)), "2.0": release(files=(LINUX,), sdist=False)},
     "nowhere": {"1.0": release(files=(LINUX,), sdist=False), "2.0": release(files=(LINUX,), sdist=False)},
@@ -175,6 +177,7 @@ def test_index_answers_are_shared_between_targets(index):
         (["c>=2", "c<2", "app"], {}),
         (["c>=2", "app"], {"c": {"<2"}}),
         (["pa", "pb"], {}),
+        (["urldep", "a"], {}),  # c is a direct URL first, so the walk never looks up a's c>=1 either
     ],
 )
 def test_prefetch_keeps_results_and_request_counts_identical(index, specs, constraints):
@@ -197,8 +200,6 @@ def test_prefetch_keeps_results_and_request_counts_identical(index, specs, const
 
 
 def test_prefetch_fetches_sibling_metadata_concurrently(index, monkeypatch):
-    from threading import Barrier
-
     barrier = Barrier(2, timeout=5)
     fetch_text = pypi.fetch_text
 

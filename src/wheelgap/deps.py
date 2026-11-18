@@ -19,6 +19,7 @@ uses it in place of a lockfile's graph. Each release picked becomes a Package wi
 from __future__ import annotations
 
 import email.parser
+import itertools
 import urllib.error
 from collections import deque
 from collections.abc import Callable
@@ -28,7 +29,7 @@ from urllib.parse import quote
 
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.specifiers import SpecifierSet
-from packaging.utils import canonicalize_name
+from packaging.utils import NormalizedName, canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 from . import cache, pypi
@@ -40,6 +41,7 @@ MAX_ROUNDS = 50  # restarts per target before giving up
 MAX_PACKAGES = 2000  # in one target's tree: past this, something is wrong
 METADATA_MAX_BYTES = 1024 * 1024  # a wheel's METADATA file
 PREFETCH_WORKERS = 16
+PREFETCH_SCAN = 256  # queued requirements looked at per pop when planning prefetches
 
 
 class DepsError(SourceError):
@@ -115,7 +117,8 @@ class Resolver:
             raise ValueError(f"no metadata file for {wheel['filename']} (HTTP {e.code})") from e
         parsed = email.parser.Parser().parsestr(text)
         requires = parsed.get_all("Requires-Dist") or []
-        # Only real metadata is cached: a proxy's HTML page must not become "no dependencies" for a day.
+        # Only a real metadata file is kept: a proxy's or captive portal's page answers 200 too, and would otherwise
+        # be cached as "no dependencies" for a day.
         if self.write_cache and parsed.get("Metadata-Version"):
             cache.save_metadata(pypi.index_url(), url, requires)
         return requires
@@ -205,13 +208,18 @@ class Resolver:
     ) -> None:
         if self._pool is None:
             return
-        batch: dict[str, list[str]] = {}
-        key: str
-        for req, parent_extras, _ in queue:
+        batch: dict[NormalizedName, list[str]] = {}
+        doomed: set[str] = set()  # names the walk will record as a direct URL error, so never looks up
+        # A shorter prefix is still certain to be visited; bounding it keeps each pop's scan cheap on a long queue.
+        for req, parent_extras, _ in itertools.islice(queue, PREFETCH_SCAN):
             if req.marker is not None and not marker_holds(str(req.marker), target, extras=parent_extras):
                 continue
             key = canonicalize_name(req.name)
-            if key in tree.errors or req.url:
+            if key in tree.errors or key in doomed:
+                continue
+            if req.url:
+                if key not in tree.chosen and key not in batch:
+                    doomed.add(key)
                 continue
             if key in tree.chosen:
                 if req.specifier and not req.specifier.contains(tree.chosen[key], prereleases=True):
@@ -355,12 +363,24 @@ class Resolver:
     ) -> _Tree:
         if not self.prefetch:
             return self._resolve(roots, target, constraints)
-        with ThreadPoolExecutor(max_workers=PREFETCH_WORKERS) as pool:
-            self._pool = pool
-            try:
-                return self._resolve(roots, target, constraints)
-            finally:
-                self._pool = None
+        # Plans are made under self.policy, which the caller may change between resolves (another source).
+        self._planned.clear()
+        pool = ThreadPoolExecutor(max_workers=PREFETCH_WORKERS)
+        self._pool = pool
+        try:
+            tree = self._resolve(roots, target, constraints)
+        except BaseException:
+            # Ctrl-C or an error: don't wait for lookups nobody will read, and don't keep cancelled or unfinished
+            # ones, so a reused Resolver looks them up again instead of reporting a CancelledError as a failure.
+            pool.shutdown(wait=False, cancel_futures=True)
+            _drop_unfinished(self._project_jobs)
+            _drop_unfinished(self._metadata_jobs)
+            _drop_unfinished(self._release_jobs)
+            raise
+        finally:
+            self._pool = None
+        pool.shutdown()
+        return tree
 
     def _resolve(
         self, roots: list[Requirement], target: Target, constraints: dict[str, set[str]] | None = None
@@ -405,6 +425,12 @@ class Resolver:
             f"--deps: can't settle on releases for Python {target.major}.{target.minor} on {target.platform} "
             "without a resolver that backtracks; check a lockfile instead (uv lock, or pip-compile)"
         )
+
+
+def _drop_unfinished(jobs: dict) -> None:
+    """Forget prefetch jobs that were cancelled or are still running, so they're looked up again when needed."""
+    for job_key in [k for k, job in jobs.items() if job.cancelled() or not job.done()]:
+        del jobs[job_key]
 
 
 def _os_family(platform: str) -> str:
