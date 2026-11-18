@@ -19,15 +19,17 @@ uses it in place of a lockfile's graph. Each release picked becomes a Package wi
 from __future__ import annotations
 
 import email.parser
+import itertools
 import urllib.error
 from collections import deque
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from urllib.parse import quote
 
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.specifiers import SpecifierSet
-from packaging.utils import canonicalize_name
+from packaging.utils import NormalizedName, canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 from . import cache, pypi
@@ -38,6 +40,8 @@ from .targets import Target
 MAX_ROUNDS = 50  # restarts per target before giving up
 MAX_PACKAGES = 2000  # in one target's tree: past this, something is wrong
 METADATA_MAX_BYTES = 1024 * 1024  # a wheel's METADATA file
+PREFETCH_WORKERS = 16
+PREFETCH_SCAN = 256  # queued requirements looked at per pop when planning prefetches
 
 
 class DepsError(SourceError):
@@ -61,7 +65,7 @@ class _Tree:
 class Resolver:
     """Resolves requirements per target. Index answers are kept for the run, so later targets cost no requests."""
 
-    def __init__(self, read_cache: bool = False, write_cache: bool = False) -> None:
+    def __init__(self, read_cache: bool = False, write_cache: bool = False, *, prefetch: bool = True) -> None:
         # The on-disk cache of wheel metadata files (cache.py): a release's Requires-Dist never changes once it's
         # uploaded. Project pages (the release lists) change with every upload, so they're never cached.
         self.read_cache, self.write_cache = read_cache, write_cache
@@ -72,11 +76,22 @@ class Resolver:
         # resolve_deps for the source being resolved: pip picks releases under it, so pick() does too.
         self.policy: Callable[[str], tuple[bool, bool]] | None = None
         self._metadata: dict[str, list[str] | Exception] = {}  # a wheel's .metadata URL -> its Requires-Dist
+        self.prefetch = prefetch
+        self._pool: ThreadPoolExecutor | None = None
+        self._project_jobs: dict[str, Future] = {}
+        self._metadata_jobs: dict[str, Future] = {}
+        self._release_jobs: dict[tuple[str, str], Future] = {}
+        self._planned: set[tuple[str, tuple[str, ...], Target]] = set()
 
     def _project(self, key: str) -> dict:
         if key not in self._projects:
             try:
-                data = pypi.fetch_json(f"{pypi.index_url()}/{quote(key)}/json", max_bytes=pypi.RELEASES_MAX_BYTES)
+                job = self._project_jobs.get(key)
+                data = (
+                    job.result()
+                    if job
+                    else pypi.fetch_json(f"{pypi.index_url()}/{quote(key)}/json", max_bytes=pypi.RELEASES_MAX_BYTES)
+                )
                 if not isinstance(data, dict) or not isinstance(data.get("releases"), dict):
                     raise ValueError("the index gave no release list")
                 info = data.get("info")
@@ -90,23 +105,30 @@ class Resolver:
             raise found
         return found
 
+    def _read_metadata(self, wheel: dict) -> list[str]:
+        """One worker's lookup: no resolver dictionaries are changed from a worker thread."""
+        url = wheel["url"] + ".metadata"
+        if self.read_cache:
+            if (cached := cache.load_metadata(pypi.index_url(), url)) is not None:
+                return cached
+        try:
+            text = pypi.fetch_text(url, max_bytes=METADATA_MAX_BYTES)
+        except urllib.error.HTTPError as e:
+            raise ValueError(f"no metadata file for {wheel['filename']} (HTTP {e.code})") from e
+        parsed = email.parser.Parser().parsestr(text)
+        requires = parsed.get_all("Requires-Dist") or []
+        # Only a real metadata file is kept: a proxy's or captive portal's page answers 200 too, and would otherwise
+        # be cached as "no dependencies" for a day.
+        if self.write_cache and parsed.get("Metadata-Version"):
+            cache.save_metadata(pypi.index_url(), url, requires)
+        return requires
+
     def _wheel_requires(self, wheel: dict) -> list[str]:
         url = wheel["url"] + ".metadata"
-        if url not in self._metadata and self.read_cache:
-            if (cached := cache.load_metadata(pypi.index_url(), url)) is not None:
-                self._metadata[url] = cached
         if url not in self._metadata:
             try:
-                text = pypi.fetch_text(url, max_bytes=METADATA_MAX_BYTES)
-                parsed = email.parser.Parser().parsestr(text)
-                requires = parsed.get_all("Requires-Dist") or []
-                self._metadata[url] = requires
-                # Only a real metadata file is kept: a proxy's or captive portal's page answers 200 too, and would
-                # otherwise be cached as "no dependencies" for a day.
-                if self.write_cache and parsed.get("Metadata-Version"):
-                    cache.save_metadata(pypi.index_url(), url, requires)
-            except urllib.error.HTTPError as e:
-                self._metadata[url] = ValueError(f"no metadata file for {wheel['filename']} (HTTP {e.code})")
+                job = self._metadata_jobs.get(url)
+                self._metadata[url] = job.result() if job else self._read_metadata(wheel)
             except Exception as e:
                 self._metadata[url] = e
         found = self._metadata[url]
@@ -114,13 +136,8 @@ class Resolver:
             raise found
         return found
 
-    def requires(self, key: str, version: str, target: Target) -> list[Requirement]:
-        """The release's Requires-Dist, from a wheel's own metadata (PEP 658): the wheel the target installs if there
-        is one, else a pure one. A target that builds from source with neither reads two other platforms' wheels and
-        takes their answer only if they agree, since an old setup.py can write platform-specific dependencies into
-        each wheel without markers. PyPI's JSON `requires_dist` is read from whichever file was uploaded first, so it
-        can be empty when the wheels declare dependencies; it's used only for a release with no wheel, and when it's
-        missing there too the dependencies are unknown."""
+    def _wheels(self, key: str, version: str, target: Target) -> list[dict]:
+        """The wheels whose metadata determines this release's dependencies on the target."""
         files = pypi._files(self._project(key)["releases"].get(version, []))
         files = [e for e in files if not e.get("yanked")] or files  # every file of a yanked release is yanked
         wheels = [e for e in files if e["filename"].endswith(".whl") and isinstance(e.get("url"), str)]
@@ -136,6 +153,16 @@ class Resolver:
                 by_os.setdefault(_os_family(e["filename"].removesuffix(".whl").rsplit("-", 1)[-1]), e)
             mine = _os_family(target.platform.replace("-", "_"))
             chosen = sorted(by_os.values(), key=lambda e: _os_family(e["filename"].rsplit("-", 1)[-1]) != mine)[:2]
+        return chosen
+
+    def requires(self, key: str, version: str, target: Target) -> list[Requirement]:
+        """The release's Requires-Dist, from a wheel's own metadata (PEP 658): the wheel the target installs if there
+        is one, else a pure one. A target that builds from source with neither reads two other platforms' wheels and
+        takes their answer only if they agree, since an old setup.py can write platform-specific dependencies into
+        each wheel without markers. PyPI's JSON `requires_dist` is read from whichever file was uploaded first, so it
+        can be empty when the wheels declare dependencies; it's used only for a release with no wheel, and when it's
+        missing there too the dependencies are unknown."""
+        chosen = self._wheels(key, version, target)
         cache_key = (key, version, ",".join(e["filename"] for e in chosen))
         if cache_key not in self._requires:
             try:
@@ -149,7 +176,12 @@ class Resolver:
                         )
                     listed = answers[0]
                 else:
-                    data = pypi.fetch_json(f"{pypi.index_url()}/{quote(key)}/{quote(version)}/json")
+                    job = self._release_jobs.get((key, version))
+                    data = (
+                        job.result()
+                        if job
+                        else pypi.fetch_json(f"{pypi.index_url()}/{quote(key)}/{quote(version)}/json")
+                    )
                     info = data.get("info") if isinstance(data, dict) else None
                     listed = info.get("requires_dist") if isinstance(info, dict) else None
                     if listed is None:
@@ -166,6 +198,69 @@ class Resolver:
         if isinstance(found, Exception):
             raise found
         return found
+
+    def _prefetch(
+        self,
+        queue: deque[tuple[Requirement, frozenset[str], list[str]]],
+        tree: _Tree,
+        learned: dict[str, set[str]],
+        target: Target,
+    ) -> None:
+        if self._pool is None:
+            return
+        batch: dict[NormalizedName, list[str]] = {}
+        doomed: set[str] = set()  # names the walk will record as a direct URL error, so never looks up
+        # A shorter prefix is still certain to be visited; bounding it keeps each pop's scan cheap on a long queue.
+        for req, parent_extras, _ in itertools.islice(queue, PREFETCH_SCAN):
+            if req.marker is not None and not marker_holds(str(req.marker), target, extras=parent_extras):
+                continue
+            key = canonicalize_name(req.name)
+            if key in tree.errors or key in doomed:
+                continue
+            if req.url:
+                if key not in tree.chosen and key not in batch:
+                    doomed.add(key)
+                continue
+            if key in tree.chosen:
+                if req.specifier and not req.specifier.contains(tree.chosen[key], prereleases=True):
+                    break
+                continue
+            # Every queued item precedes any newly discovered edge. Only this prefix is certain to be visited:
+            # a duplicate may conflict, a learned constraint may refuse, and the package cap may stop the walk.
+            if key in batch or len(tree.chosen) + len(batch) >= MAX_PACKAGES:
+                break
+            batch[key] = sorted(tree.imposed.get(key, set()) | learned.get(key, set()) | {str(req.specifier)})
+            if key in learned or len(batch) == PREFETCH_WORKERS:
+                break
+        for key in batch:
+            if key not in self._projects and key not in self._project_jobs:
+                self._project_jobs[key] = self._pool.submit(
+                    pypi.fetch_json, f"{pypi.index_url()}/{quote(key)}/json", max_bytes=pypi.RELEASES_MAX_BYTES
+                )
+        for key, specs in batch.items():
+            plan = (key, tuple(specs), target)
+            if plan in self._planned:
+                continue
+            self._planned.add(plan)
+            try:
+                version = self.pick(key, specs, target)
+                if version is None:
+                    continue
+                chosen = self._wheels(key, version, target)
+                if (key, version, ",".join(e["filename"] for e in chosen)) in self._requires:
+                    continue
+                if chosen:
+                    # If the first metadata lookup fails, requires() never asks for the second platform's wheel.
+                    wheel = chosen[0]
+                    url = wheel["url"] + ".metadata"
+                    if url not in self._metadata and url not in self._metadata_jobs:
+                        self._metadata_jobs[url] = self._pool.submit(self._read_metadata, wheel)
+                elif (key, version) not in self._release_jobs:
+                    self._release_jobs[key, version] = self._pool.submit(
+                        pypi.fetch_json, f"{pypi.index_url()}/{quote(key)}/{quote(version)}/json"
+                    )
+            except Exception:
+                pass  # The single-threaded walk reports lookup errors in exactly the same place as before.
 
     def pick(self, key: str, specs: list[str], target: Target) -> str | None:
         """The release pip would pick: the newest meeting every specifier with a file that isn't yanked, supports the
@@ -210,6 +305,7 @@ class Resolver:
         extras: dict[str, frozenset[str]] = {}
         queue: deque[tuple[Requirement, frozenset[str], list[str]]] = deque((r, frozenset(), []) for r in roots)
         while queue:
+            self._prefetch(queue, tree, learned, target)
             req, parent_extras, path = queue.popleft()
             if req.marker is not None and not marker_holds(str(req.marker), target, extras=parent_extras):
                 continue
@@ -265,6 +361,30 @@ class Resolver:
     def resolve(
         self, roots: list[Requirement], target: Target, constraints: dict[str, set[str]] | None = None
     ) -> _Tree:
+        if not self.prefetch:
+            return self._resolve(roots, target, constraints)
+        # Plans are made under self.policy, which the caller may change between resolves (another source).
+        self._planned.clear()
+        pool = ThreadPoolExecutor(max_workers=PREFETCH_WORKERS)
+        self._pool = pool
+        try:
+            tree = self._resolve(roots, target, constraints)
+        except BaseException:
+            # Ctrl-C or an error: don't wait for lookups nobody will read, and don't keep cancelled or unfinished
+            # ones, so a reused Resolver looks them up again instead of reporting a CancelledError as a failure.
+            pool.shutdown(wait=False, cancel_futures=True)
+            _drop_unfinished(self._project_jobs)
+            _drop_unfinished(self._metadata_jobs)
+            _drop_unfinished(self._release_jobs)
+            raise
+        finally:
+            self._pool = None
+        pool.shutdown()
+        return tree
+
+    def _resolve(
+        self, roots: list[Requirement], target: Target, constraints: dict[str, set[str]] | None = None
+    ) -> _Tree:
         # A requirements file's -c constraints count as learned specifiers from the start; unlike a constraint the
         # rounds below learn, a seeded one is never dropped for going unused — it applies while its package is in
         # the tree, and a package that never installs leaves it harmlessly unimposed.
@@ -305,6 +425,12 @@ class Resolver:
             f"--deps: can't settle on releases for Python {target.major}.{target.minor} on {target.platform} "
             "without a resolver that backtracks; check a lockfile instead (uv lock, or pip-compile)"
         )
+
+
+def _drop_unfinished(jobs: dict) -> None:
+    """Forget prefetch jobs that were cancelled or are still running, so they're looked up again when needed."""
+    for job_key in [k for k, job in jobs.items() if job.cancelled() or not job.done()]:
+        del jobs[job_key]
 
 
 def _os_family(platform: str) -> str:

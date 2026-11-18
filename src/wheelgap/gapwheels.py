@@ -30,10 +30,11 @@ from .sources import Source
 from .targets import Target
 
 SCHEMA = 1
-# Inputs pip installs from as they are: a requirements file, a pyproject.toml, a pip report or package names. Lockfiles
-# pin each file's URL, so adding an index to pip changes nothing for them; they get the lockfile advice (_lock_kinds).
-# A script (PEP 723) gets the uv config for its own # /// script block instead (_script_parts).
-PIP_KINDS = frozenset({"requirements", "pyproject", "pip-report", None})
+# Inputs pip installs from as they are: a requirements file, a pyproject.toml, a pip report, a conda environment file's
+# `pip:` list or package names. Lockfiles pin each file's URL, so adding an index to pip changes nothing for them; they
+# get the lockfile advice (_lock_kinds). A script (PEP 723) gets the uv config for its own # /// script block instead
+# (_script_parts).
+PIP_KINDS = frozenset({"requirements", "pyproject", "pip-report", "conda-env", None})
 INDEX = "https://wheelgap.github.io/wheels/simple/"
 DOWNLOAD = "https://github.com/wheelgap/wheels/releases/download/gap-wheels"
 ABOUT = "https://wheelgap.github.io/wheels/"

@@ -71,6 +71,18 @@ def test_pip_way_for_a_requirements_file(capsys, fake_pypi, gap_wheels, tmp_path
     assert code == 1 and "  nowheels 0.9: win-arm64\n" in out and f"  --extra-index-url {INDEX}\n" in out
 
 
+def test_pip_way_for_a_conda_environment_file(capsys, fake_pypi, gap_wheels, tmp_path):
+    gap_wheels.add("nowheels", "0.9", FT_WHEEL)
+    env = tmp_path / "environment.yml"
+    env.write_text("dependencies:\n  - python=3.14\n  - pip:\n    - nowheels==0.9\n", encoding="utf-8")
+    code, out, _ = run(capsys, str(env), "-p", "3.14t", "-t", "win-arm64", "--fix")
+    assert code == 1 and "  nowheels 0.9: win-arm64\n" in out
+    assert f"To install them with pip, add this line to your requirements file:\n  --extra-index-url {INDEX}\n" in out
+    assert "lock again" not in out and "[tool.uv" not in out
+    code, out, _ = run(capsys, str(env), "-p", "3.14t", "-t", "win-arm64", "--fix", "--explain")
+    assert f"pip install --extra-index-url {INDEX} nowheels==0.9" in out
+
+
 def test_uv_way_for_a_uv_lock_with_direct_and_transitive_packages(capsys, fixtures, gap_wheels):
     # puresdist is a direct dependency of the uvproj project; nativeext comes in through fastlib.
     gap_wheels.add("puresdist", "1.0", "puresdist-1.0-cp314-cp314t-win_arm64.whl")
@@ -613,6 +625,7 @@ def test_print_gap_wheel_snippet_is_empty_when_no_wheel_fits(capsys, fake_pypi, 
     [
         (lambda fixtures, tmp: [str(fixtures / "poetryproj" / "poetry.lock")], "poetry.lock"),
         (lambda fixtures, tmp: [str(tmp / "pyproject.toml")], "pyproject.toml"),
+        (lambda fixtures, tmp: [str(tmp / "environment.yml")], "environment.yml"),
         (
             lambda fixtures, tmp: [str(tmp / "requirements.txt"), str(fixtures / "uvproj" / "uv.lock")],
             "requirements.txt, uv.lock",
@@ -627,6 +640,7 @@ def test_print_gap_wheel_snippet_refuses_other_inputs_before_any_lookup(
         '[project]\nname = "app"\nversion = "0"\ndependencies = ["nowheels==0.9"]\n', encoding="utf-8"
     )
     (tmp_path / "requirements.txt").write_text("nowheels==0.9\n", encoding="utf-8")
+    (tmp_path / "environment.yml").write_text("dependencies:\n  - pip:\n    - nowheels==0.9\n", encoding="utf-8")
     code, out, err = run(capsys, *inputs(fixtures, tmp_path), *SNIPPET)
     assert code == 2 and out == ""
     assert err == (
