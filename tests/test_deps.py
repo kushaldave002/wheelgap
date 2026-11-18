@@ -166,6 +166,93 @@ def test_index_answers_are_shared_between_targets(index):
     assert len(index) == asked
 
 
+@pytest.mark.parametrize(
+    "specs,constraints",
+    [
+        (["app", "plain", "sdistonly", "agree", "differ", "missing"], {}),
+        (["a", "b", "app"], {}),
+        (["x", "y", "app"], {}),
+        (["c>=2", "c<2", "app"], {}),
+        (["c>=2", "app"], {"c": {"<2"}}),
+        (["pa", "pb"], {}),
+    ],
+)
+def test_prefetch_keeps_results_and_request_counts_identical(index, specs, constraints):
+    roots = [Requirement(spec) for spec in specs]
+
+    def run(prefetch):
+        index.clear()
+        resolver = Resolver(prefetch=prefetch)
+        try:
+            result = resolver.resolve(roots, WIN, constraints)
+        except DepsError as error:
+            result = str(error)
+        return result, Counter(index)
+
+    sequential, sequential_calls = run(False)
+    parallel, parallel_calls = run(True)
+    assert parallel == sequential
+    assert parallel_calls == sequential_calls
+    assert all(count == 1 for count in parallel_calls.values())
+
+
+def test_prefetch_fetches_sibling_metadata_concurrently(index, monkeypatch):
+    from threading import Barrier
+
+    barrier = Barrier(2, timeout=5)
+    fetch_text = pypi.fetch_text
+
+    def together(url, **kwargs):
+        if "/a-" in url or "/b-" in url:
+            barrier.wait()
+        return fetch_text(url, **kwargs)
+
+    monkeypatch.setattr(pypi, "fetch_text", together)
+    tree = Resolver().resolve([Requirement("a"), Requirement("b")], WIN)
+    assert tree.errors == {}
+    assert tree.chosen["c"] == "1.5"
+
+
+def test_prefetch_metadata_failure_does_not_fetch_unused_platform_wheel(index, monkeypatch):
+    fetch_text = pypi.fetch_text
+
+    def broken(url, **kwargs):
+        if "/agree-" in url and WIN_AMD in url:
+            index.append(url)
+            raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+        return fetch_text(url, **kwargs)
+
+    monkeypatch.setattr(pypi, "fetch_text", broken)
+    roots = [Requirement("agree"), Requirement("app")]
+    sequential = Resolver(prefetch=False).resolve(roots, WIN)
+    sequential_calls = Counter(index)
+    index.clear()
+    parallel = Resolver().resolve(roots, WIN)
+    assert parallel == sequential
+    assert Counter(index) == sequential_calls
+
+
+def test_prefetch_does_not_refetch_cached_sdist_requirements(index):
+    resolver = Resolver()
+    resolver.requires("sdistonly", "1.0", WIN)
+    index.clear()
+    resolver.resolve([Requirement("sdistonly")], WIN)
+    assert not any("/sdistonly/" in url for url in index)
+
+
+def test_prefetch_stops_before_the_package_limit(index, monkeypatch):
+    monkeypatch.setattr(deps, "MAX_PACKAGES", 1)
+    roots = [Requirement("a"), Requirement("b"), Requirement("app")]
+
+    def run(prefetch):
+        index.clear()
+        with pytest.raises(DepsError, match="more than 1 packages"):
+            Resolver(prefetch=prefetch).resolve(roots, WIN)
+        return Counter(index)
+
+    assert run(True) == run(False)
+
+
 def test_cli_checks_what_the_names_install(index, capsys):
     code = main(["app==1.0", "--deps", "-p", "3.14", "-t", "win-arm64", "-t", "linux-x86_64", "--json", "--explain",
                  "--no-cache", "--all"])  # fmt: skip
