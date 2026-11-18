@@ -93,7 +93,7 @@ python = ["3.13", "3.14t"]
 targets = ["linux-x86_64", "linux-aarch64", "musl-aarch64"]
 ```
 
-Not sure what to put there? `wheelgap --suggest-targets` reads the platforms your CI and Dockerfiles already name and suggests these lines ([how](https://wheelgap.github.io/wheelgap/targets/#suggest-targets)).
+Not sure what to put there? `wheelgap --suggest-targets` reads the platforms your GitHub Actions, GitLab CI and Dockerfiles already name and suggests these lines ([how](https://wheelgap.github.io/wheelgap/targets/#suggest-targets)).
 
 Each cell in the table is one of:
 

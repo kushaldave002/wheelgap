@@ -1298,6 +1298,115 @@ def read_workflow_text(text: str, name: str, out: Suggestions) -> None:
         _read_job(job, name, out)
 
 
+# GitLab.com hosted runner tags (2026-11-17):
+# https://docs.gitlab.com/ci/runners/hosted_runners/linux/
+# https://docs.gitlab.com/ci/runners/hosted_runners/windows/
+# https://docs.gitlab.com/ci/runners/hosted_runners/macos/
+_GITLAB_RUNNERS = {
+    **{f"saas-linux-{size}-amd64": "linux-x86_64" for size in ("small", "medium", "large", "xlarge", "2xlarge")},
+    **{f"saas-linux-{size}-arm64": "linux-aarch64" for size in ("small", "medium", "large")},
+    "saas-windows-medium-amd64": "win-amd64",
+    "saas-macos-medium-m1": "macos-arm64",
+    "saas-macos-large-m2pro": "macos-arm64",
+}
+_GITLAB_GLOBALS = {
+    "default",
+    "image",
+    "stages",
+    "types",
+    "variables",
+    "workflow",
+    "include",
+    "cache",
+    "services",
+    "before_script",
+    "after_script",
+    "spec",
+}
+
+
+def _gitlab_supported(node: _Node) -> None:
+    """Refuse inheritance and computed job definitions before suggesting anything from the file."""
+    if node.raw.startswith("&") or node.value is _ALIAS:
+        raise _Unsure("YAML anchors and aliases aren't read", node.line)
+    if (
+        node.key in ("include", "extends", "inherit", "trigger")
+        or node.key == "parallel"
+        and node.get("matrix") is not None
+    ):
+        raise _Unsure(f"{node.key}: {('matrix ' if node.key == 'parallel' else '')}isn't read", node.line)
+    for child in node.children:
+        _gitlab_supported(child)
+
+
+def _read_gitlab_job(job: _Node, defaults: _Node, root: _Node, name: str, out: Suggestions) -> None:
+    try:
+        if job.value is not None or any(child.key is None for child in job.children):
+            raise _Unsure("can't read the job", job.line)
+        tags = job.get("tags") or defaults.get("tags")
+        target = None
+        if tags is not None:
+            values = _data(tags)
+            if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], _Scalar):
+                raise _Unsure("tags isn't one known hosted runner tag", tags.line)
+            label = values[0].plain_text()
+            target = _GITLAB_RUNNERS.get(label)
+            if target is None:
+                raise _Unsure(f"{label!r} isn't a GitLab-hosted runner wheelgap knows", tags.line)
+        node = job.get("image") or defaults.get("image") or root.get("image")
+        if node is None:
+            if target is None:
+                raise _Unsure("no image or known hosted runner tag", job.line)
+            assert tags is not None
+            out.targets.append(Found(target, name, tags.line, f"tags: {label}"))
+            return
+        if node.value is None and node.children:
+            for child in node.children:
+                if child.key != "name":
+                    raise _Unsure(f"image: {child.key} isn't read", child.line)
+            image_name = node.get("name")
+            assert image_name is not None
+            node = image_name
+        image_text = _scalar(node).plain_text()
+        if "$" in image_text:
+            raise _Unsure("image contains a variable, which isn't read", node.line)
+        if target is not None and target not in _RUNNER_PLATFORM:
+            raise _Unsure("Docker images only run on Linux hosted runners", node.line)
+        platform = _RUNNER_PLATFORM.get(target) if target is not None else None
+        parsed = parse_image(image_text, platform)
+        if parsed.platform.startswith("win"):
+            raise _Unsure("Windows container images aren't supported on GitLab-hosted Linux runners", node.line)
+        source = f"image: {image_text}"
+        detail, python_source = _image_sources(parsed, source, platform, runner_cpu=target is not None)
+        out.targets.append(Found(parsed.platform, name, node.line, detail, parsed.glibc, parsed.musl))
+        out.pythons.append(Found(parsed.python, name, node.line, python_source))
+    except (_Unsure, DockerfileError) as e:
+        line = e.line if isinstance(e, _Unsure) else node.line if node is not None else job.line
+        out.unreadable.append(Unreadable(name, line, f"job {job.key}: {e}"))
+
+
+def read_gitlab(path: Path, out: Suggestions) -> None:
+    name = path.name
+    try:
+        root = _parse_tree(path.read_bytes().decode("utf-8-sig"))
+        if any(child.key is None for child in root.children):
+            raise _Unsure("pipeline is not a mapping")
+        _gitlab_supported(root)
+        defaults = root.get("default") or _Node(0, 0, "default")
+        if defaults.value is not None or any(child.key is None for child in defaults.children):
+            raise _Unsure("default isn't a mapping", defaults.line)
+    except (_NotRead, _Unsure) as e:
+        reason = f"uses YAML this scanner doesn't read: {e.text}" if isinstance(e, _NotRead) else e.reason
+        out.unreadable.append(Unreadable(name, e.line, reason))
+        return
+    except (UnicodeDecodeError, OSError) as e:
+        out.unreadable.append(Unreadable(name, None, f"couldn't read the file ({e})"))
+        return
+    for job in root.children:
+        if job.key is not None and not job.key.startswith(".") and job.key not in _GITLAB_GLOBALS:
+            _read_gitlab_job(job, defaults, root, name, out)
+
+
 def _container_kind(name: str) -> str | None:
     """ "file" for a Dockerfile or Containerfile (Dockerfile, dockerfile.dev, Containerfile.prod, prod.Dockerfile),
     "template" for one that a tool fills in first (Dockerfile.j2), None for anything else."""
@@ -1359,7 +1468,7 @@ def read_docker(path: Path, name: str, out: Suggestions) -> None:
 
 
 def suggest(folder: Path) -> Suggestions:
-    """Read the project's GitHub Actions workflows and Dockerfiles. Raises NotADirectoryError for a missing folder."""
+    """Read the project's GitHub Actions, GitLab CI and Dockerfiles. Raises NotADirectoryError for a missing folder."""
     if not folder.is_dir():
         raise NotADirectoryError(f"{folder}: not a folder")
     out = Suggestions()
@@ -1375,6 +1484,9 @@ def suggest(folder: Path) -> Suggestions:
         for path in paths:
             if path.suffix in (".yml", ".yaml") and path.is_file():
                 read_workflow(path, path.relative_to(folder).as_posix(), out)
+    gitlab = folder / ".gitlab-ci.yml"
+    if gitlab.is_file():
+        read_gitlab(gitlab, out)
     for path in dockerfiles(folder, out):
         read_docker(path, path.relative_to(folder).as_posix(), out)
     out.unreadable = list(dict.fromkeys(out.unreadable))

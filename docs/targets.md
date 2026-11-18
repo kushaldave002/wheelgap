@@ -246,6 +246,16 @@ The snippet combines every job in every workflow, including lint, release and bo
       listed under "Couldn't read".
     - Input names are case-insensitive, as Actions reads them (`Architecture: x86`). Step keys such as `uses` and `with`
       aren't.
+- **GitLab CI** (`.gitlab-ci.yml` at the project root): each job's literal `image:` (a string or a mapping with only
+  `name:`), or its `default: image:` / top-level `image:` fallback. The image is read as a Dockerfile's `FROM` is;
+  a job's image overrides the default. Known [GitLab.com hosted runner tags](https://docs.gitlab.com/ci/runners/hosted_runners/)
+  name the CPU: `saas-linux-small-arm64` with `python:3.13-alpine` suggests `musl-aarch64` and Python 3.13.
+  `default: tags:` applies unless a job overrides it. With an image and no tags, the suggestion uses GitLab.com's
+  default Linux amd64 runner, and says so in the source note. Without an image, a recognized tag names only a
+  target; it does not imply a Python version. Linux small/medium/large amd64 and arm64 tags, xlarge/2xlarge amd64,
+  `saas-windows-medium-amd64` and the macOS M1/M2 Pro tags are recognized. Unknown/self-hosted tags, multiple tags,
+  variable images and unsupported image mappings are unreadable. `include:`, `extends:`, `inherit:`, trigger jobs,
+  `parallel: matrix:`, YAML anchors and `!reference` are refused rather than guessed.
 - **Runner labels.** [GitHub-hosted runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
   labels map to targets as follows. Other Ubuntu versions (`ubuntu-22.04`, `ubuntu-22.04-arm`) and Windows images
   (`windows-2022`, `windows-2025-vs2026`) map the same way.

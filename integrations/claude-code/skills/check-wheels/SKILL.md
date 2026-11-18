@@ -23,7 +23,7 @@ uvx wheelgap@latest -p 3.13 -t linux-aarch64,musl-aarch64 --json
 - **Platforms (`-t`):** use what the project ships to.
   - A Dockerfile: `uvx wheelgap@latest --dockerfile Dockerfile --json` takes both Python and platform from the final stage (global `ARG` defaults included); if the build passes `--build-arg NAME=VALUE`, pass the same `--build-arg`.
   - A `[tool.wheelgap]` table in `pyproject.toml`: its defaults apply with no `-p`/`-t`.
-  - Otherwise run `uvx wheelgap@latest --suggest-targets --json` and confirm its suggestions with the user: it reads the targets and Pythons the project's GitHub Actions workflows and Dockerfiles name, each with its file and line, lists what it couldn't read, and checks nothing. Failing that, ask, or use `-t all` (the eight common platforms).
+  - Otherwise run `uvx wheelgap@latest --suggest-targets --json` and confirm its suggestions with the user: it reads the targets and Pythons the project's GitHub Actions workflows and Dockerfiles (for CI sources the released tool cannot read, confirm the job image and runner architecture with the user) name, each with its file and line, lists what it couldn't read, and checks nothing. Failing that, ask, or use `-t all` (the eight common platforms).
   - `uvx wheelgap@latest --list-targets` lists every target and alias.
 - **Libc:** if the user names a deployment distro, pass `--distro NAME` (e.g. `ubuntu-22.04`, `debian-12`, `rhel-9`, `amazonlinux-2023`, `alpine`; `--list-targets` lists them). For a distro that isn't listed, verify its libc version and pass `--glibc X.Y` or `--musl X.Y`. None of these select platforms; Alpine still needs a `musl-*` target. With `--dockerfile`, leave `--distro` out: the image already sets the libc, and `--distro` would override it.
 

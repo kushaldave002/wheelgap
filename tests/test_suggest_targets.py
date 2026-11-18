@@ -2751,3 +2751,64 @@ def test_setup_python_in_a_container_that_cant_be_read_suggests_nothing(tmp_path
     assert found.targets == []
     assert found.pythons == []
     assert [u.reason for u in found.unreadable] == ["job test: container: ${{ matrix.image }} is an expression"]
+
+
+@pytest.mark.parametrize(
+    "text,target,python,line",
+    [
+        ("default:\n  image: python:3.13-alpine\ntest:\n  script: pytest\n", "musl-x86_64", "3.13", 2),
+        ("image: python:3.13-alpine\ntest:\n  script: pytest\n", "musl-x86_64", "3.13", 1),
+        (
+            "default:\n  image: python:3.13-alpine\ntest:\n  image: {name: 'python:3.12-slim'}\n",
+            "linux-x86_64",
+            "3.12",
+            4,
+        ),
+        ("test:\n  image: python:3.13-alpine\n  tags: [saas-linux-small-arm64]\n", "musl-aarch64", "3.13", 2),
+        ("default:\n  tags: [saas-linux-small-arm64]\ntest:\n  image: python:3.13-alpine\n", "musl-aarch64", "3.13", 4),
+    ],
+)
+def test_gitlab_images(tmp_path, text, target, python, line):
+    (tmp_path / ".gitlab-ci.yml").write_text(text, encoding="utf-8")
+    found = suggest(tmp_path)
+    assert where(found.targets) == [(target, ".gitlab-ci.yml", line)]
+    assert where(found.pythons) == [(python, ".gitlab-ci.yml", line)]
+    assert not found.unreadable
+
+
+@pytest.mark.parametrize(
+    "tag,target",
+    [
+        ("saas-linux-small-arm64", "linux-aarch64"),
+        ("saas-windows-medium-amd64", "win-amd64"),
+        ("saas-macos-medium-m1", "macos-arm64"),
+    ],
+)
+def test_gitlab_hosted_runner_tags(tmp_path, tag, target):
+    (tmp_path / ".gitlab-ci.yml").write_text(f"test:\n  tags: [{tag}]\n", encoding="utf-8")
+    found = suggest(tmp_path)
+    assert where(found.targets) == [(target, ".gitlab-ci.yml", 2)]
+    assert not found.pythons and not found.unreadable
+
+
+@pytest.mark.parametrize(
+    "text,reason",
+    [
+        ("include: other.yml\ntest:\n  image: python:3.13\n", "include"),
+        ("test:\n  extends: .base\n  image: python:3.13\n", "extends"),
+        ("image: python:3.13\ntest:\n  trigger: another-project\n", "trigger"),
+        ("test:\n  image: $IMAGE\n", "variable"),
+        ("test:\n  image: python:3.13\n  tags: [my-build-box]\n", "hosted runner"),
+        ("test:\n  image: python:3.13\n  parallel:\n    matrix:\n      - PYTHON: ['3.12']\n", "matrix"),
+        (".base: &base\n  image: python:3.13\ntest:\n  image: python:3.13\n", "anchor"),
+        ("test:\n  image: !reference [.base, image]\n", "YAML"),
+        ("default:\n  image: python:3.13\ntest:\n  inherit:\n    default: false\n", "inherit"),
+        ("test:\n  image: {name: 'python:3.13', docker: {platform: 'linux/arm64'}}\n", "docker"),
+        ("test:\n  image: python:3.13\n  tags: [saas-windows-medium-amd64]\n", "Linux"),
+    ],
+)
+def test_gitlab_uncertain_jobs_are_not_guessed(tmp_path, text, reason):
+    (tmp_path / ".gitlab-ci.yml").write_text(text, encoding="utf-8")
+    found = suggest(tmp_path)
+    assert not found.targets and not found.pythons
+    assert found.unreadable and reason in found.unreadable[0].reason
