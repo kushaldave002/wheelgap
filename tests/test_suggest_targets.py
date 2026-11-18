@@ -406,6 +406,36 @@ def test_dockerfile_it_cant_read(tmp_path):
     assert unreadable(found) == [("Dockerfile", None, "ARG BASE has no default and no --build-arg BASE=VALUE")]
 
 
+@pytest.mark.parametrize("linked", ["files", "workflows folder"])
+def test_symlinks_out_of_the_project_are_not_read(tmp_path, linked):
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "workflows").mkdir(parents=True)
+    (elsewhere / "workflows" / "ci.yml").write_text("jobs:\n  test:\n    runs-on: windows-latest\n", encoding="utf-8")
+    (elsewhere / "Dockerfile").write_text("FROM python:3.13-alpine\n", encoding="utf-8")
+    project = tmp_path / "project"
+    (project / ".github").mkdir(parents=True)
+    (project / "Dockerfile.dev").write_text("FROM python:3.12-slim\n", encoding="utf-8")
+    try:
+        (project / "Dockerfile").symlink_to(elsewhere / "Dockerfile")
+        if linked == "files":
+            (project / ".github" / "workflows").mkdir()
+            (project / ".github" / "workflows" / "ci.yml").symlink_to(elsewhere / "workflows" / "ci.yml")
+            (project / "docker").mkdir()
+            (project / "docker" / "Dockerfile").symlink_to(project / "Dockerfile.dev")  # inside: read
+        else:
+            (project / ".github" / "workflows").symlink_to(elsewhere / "workflows", target_is_directory=True)
+    except OSError:
+        pytest.skip("can't create symlinks here")
+    found = suggest(project)
+    outside = "a symlink out of the project: not read"
+    workflow_name = ".github/workflows/ci.yml" if linked == "files" else ".github/workflows"
+    assert sorted(unreadable(found)) == [(workflow_name, None, outside), ("Dockerfile", None, outside)]
+    expected = [("linux-x86_64", "Dockerfile.dev", 1)]
+    if linked == "files":
+        expected.append(("linux-x86_64", "docker/Dockerfile", 1))
+    assert where(found.targets) == expected
+
+
 def test_glibc_is_left_out_when_the_sources_disagree(tmp_path, capsys):
     workflow(tmp_path, "jobs:\n  test:\n    runs-on: ubuntu-latest\n")
     (tmp_path / "Dockerfile").write_text("FROM python:3.13-trixie\n")

@@ -56,6 +56,19 @@ def level(status: Status, target: Target, fail_on: str, advisory: frozenset[Targ
     return "error"
 
 
+def via_hint(row: Row, target: Target) -> str:
+    """` (via mcp)`, or ` (via mcp +1)` for more: the direct dependency that brings a transitive package in on the
+    target. Empty for a direct one."""
+    seen: dict[str, str] = {}
+    for parent in row.direct_via.get(target, ()):
+        seen.setdefault(canonicalize_name(parent), parent)
+    via = tuple(seen.values())
+    if not via:
+        return ""
+    suffix = f" +{len(via) - 1}" if len(via) > 1 else ""
+    return f" (via {via[0]}{suffix})"
+
+
 def sarif_log(
     rows: list[Row],
     targets: list[Target],
@@ -112,14 +125,7 @@ def sarif_log(
                 no_binary=pkg.no_binary,
                 only_binary=pkg.only_binary,
             )
-            seen: dict[str, str] = {}
-            for parent in row.direct_via.get(target, ()):
-                seen.setdefault(canonicalize_name(parent), parent)
-            via = tuple(seen.values())
-            hint = ""
-            if via:
-                suffix = f" +{len(via) - 1}" if len(via) > 1 else ""
-                hint = f" (via {via[0]}{suffix})"
+            hint = via_hint(row, target)
             text = f"{name}{hint} {WORDS[status]} {label}" + (" (advisory)" if target in advisory else "") + "."
             if reasons:
                 text += " " + "; ".join(reasons) + "."

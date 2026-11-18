@@ -11,9 +11,9 @@ sdist means the install fails (`missing`). Where wheelgap can't be sure, it says
 - **Lockfiles are read offline.** `uv.lock`, `pylock.toml`, `poetry.lock` and `pdm.lock` already record every file
   published for each pinned version (except a `uv.lock` or `pylock.toml` whose `requires-python` leaves out the Python
   you check; see [below](#index-lookups)).
-- **`requirements.txt`, `requirements.lock`, `Pipfile.lock`, `pyproject.toml`, package names and
-  `pixi.lock`** are looked up on the PyPI JSON API. wheelgap checks the requirements you give it and doesn't resolve
-  dependencies, so feed it a fully pinned file. See [Inputs](inputs.md).
+- **`requirements.txt`, `requirements.lock`, `Pipfile.lock`, `pyproject.toml`, package names, `pixi.lock` and
+  the `pip:` list of a conda `environment.yml`** are looked up on the PyPI JSON API. wheelgap checks the
+  requirements you give it and doesn't resolve dependencies, so feed it a fully pinned file. See [Inputs](inputs.md).
 
 ## Version ranges
 

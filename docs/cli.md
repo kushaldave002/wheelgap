@@ -123,16 +123,19 @@ Include every uv project extra (or every `pyproject.toml` extra, or every Poetry
 
 ### `--group` {#group}
 
-`--group NAME`: include a dependency group (`uv.lock`, Poetry 2.x `poetry.lock`, `pdm.lock`). Repeatable.
+`--group NAME`: include a dependency group (`uv.lock`, Poetry 2.x `poetry.lock`, `pdm.lock`, or a
+`pyproject.toml` `[dependency-groups]` group). Repeatable. With `pyproject.toml`, no group is included by default.
 
 ### `--no-dev` {#no-dev}
 
-Leave out the `dev` group (`uv.lock`, Poetry 2.x `poetry.lock`, `pdm.lock`).
+Leave out the `dev` group (`uv.lock`, Poetry 2.x `poetry.lock`, `pdm.lock`). An error for `pyproject.toml`,
+which includes no group by default.
 
 ### `--only-group` {#only-group}
 
 `--only-group NAME`: check only the named dependency groups, without the project's own dependencies or default
-groups. Repeatable; combine it with `--group` to add more groups, but not with `--extra` or `--all-extras`.
+groups (`uv.lock`, Poetry 2.x `poetry.lock`, `pdm.lock`, or `pyproject.toml` `[dependency-groups]`).
+Repeatable; combine it with `--group` to add more groups, but not with `--extra` or `--all-extras`.
 
 ### `--environment` {#environment}
 
@@ -202,7 +205,7 @@ to PyPI. Can't be combined with `--offline`.
 ### `--offline` {#offline}
 
 Never contact an index, for CI and coding agents without network. Inputs that need a lookup (requirements files,
-`pyproject.toml`, `Pipfile.lock`, package names, lockfile entries with no file list, and `pixi.lock`)
+`pyproject.toml`, `Pipfile.lock`, package names, lockfile entries with no file list, `pixi.lock` and `environment.yml`)
 make it exit 2 with an error
 naming the packages, so use a lockfile instead. A `--pyodide-lock` URL is refused too: pass a downloaded copy. The
 [`requires-python` re-check](inputs.md#uvlock) is skipped, with a note that those Pythons may show false gaps.
@@ -385,9 +388,9 @@ See [Installing from the gap wheel index](recipes.md#installing-from-the-gap-whe
 With `--explain` too (**after 0.13.0**), each package a gap wheel fills gets a `gap wheel` line under its first filled
 target, naming the targets it fills and saying the wheel is unofficial: built by wheelgap from the PyPI sdist, not from
 the package's maintainers. For inputs pip installs from as they are (a requirements file, a `pyproject.toml`, a pip
-report or package names) it gives the `pip install --extra-index-url` command; for a lockfile it points to the
-`--fix` section, since that lockfile's own tool has to pick the index up. With `--json`, each package gets
-[`gap_wheel`](output.md#fix).
+report, an `environment.yml`'s `pip:` list or package names) it gives the `pip install --extra-index-url` command;
+for a lockfile it points to the `--fix` section, since that lockfile's own tool has to pick the index up. With
+`--json`, each package gets [`gap_wheel`](output.md#fix).
 
 ### `--print-gap-wheel-snippet` {#print-gap-wheel-snippet}
 
@@ -405,8 +408,8 @@ snippet; when no gap wheel fits, stdout is empty.
   dependency. Add them to an existing `[tool.uv.sources]` table rather than a second one, then run `uv lock`.
 
 It refuses, with exit code 2 and before any lookup, more than one input and any other input: `pyproject.toml`,
-`pylock.toml`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`, `pixi.lock` and a pip report. Use `--fix` alone for
-those. It can't be used with `--explain` (and its add-ons), `--all`, `--from-log`, `--dist`, `--json`, `--markdown`, `--junit`, `--sarif`, `--badge`,
+`pylock.toml`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`, `pixi.lock`, a pip report and an `environment.yml`. Use
+`--fix` alone for those. It can't be used with `--explain` (and its add-ons), `--all`, `--from-log`, `--dist`, `--json`, `--markdown`, `--junit`, `--sarif`, `--gitlab-code-quality`, `--badge`,
 `--write-constraints` or `--github-annotations`.
 
 ```console
@@ -439,6 +442,12 @@ a pull request comment. See [Output](output.md#markdown).
 [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) report to `PATH`, alongside the usual
 output, for GitHub code scanning. It's written even when the check fails, and an empty `PATH` is an error, as for
 `--junit`. See [Output](output.md#sarif) and [CI](ci.md#code-scanning).
+
+### `--gitlab-code-quality` {#gitlab-code-quality}
+
+`--gitlab-code-quality PATH`: also write a GitLab Code Quality JSON report to `PATH`, alongside the usual output,
+even when the check fails. An empty `PATH` is an error. See [Output](output.md#gitlab-code-quality) and
+[GitLab CI](ci.md#gitlab-ci).
 
 ### `--badge` {#badge}
 

@@ -5,6 +5,7 @@ import json
 import re
 import urllib.error
 from collections import Counter
+from threading import Barrier
 
 import pytest
 from packaging.requirements import Requirement
@@ -57,6 +58,7 @@ INDEX = {
     "pa": {"1.0": release(["pc>=2.0b1"])},
     "pb": {"1.0": release(["pc"])},
     "pc": {"1.0": release(), "2.0": release(), "2.1b1": release()},
+    "urldep": {"1.0": release(["c @ https://files.example/c-1.0.tar.gz"])},  # c from a direct URL
     # noarm 2.0 has only a Linux wheel and no sdist, so pip on Windows on ARM installs 1.0; nowhere never installs.
     "noarm": {"1.0": release(files=(WIN_ARM,)), "2.0": release(files=(LINUX,), sdist=False)},
     "nowhere": {"1.0": release(files=(LINUX,), sdist=False), "2.0": release(files=(LINUX,), sdist=False)},
@@ -164,6 +166,92 @@ def test_index_answers_are_shared_between_targets(index):
     asked = len(index)
     resolver.resolve([Requirement("app==1.0")], LIN)
     assert len(index) == asked
+
+
+@pytest.mark.parametrize(
+    "specs,constraints",
+    [
+        (["app", "plain", "sdistonly", "agree", "differ", "missing"], {}),
+        (["a", "b", "app"], {}),
+        (["x", "y", "app"], {}),
+        (["c>=2", "c<2", "app"], {}),
+        (["c>=2", "app"], {"c": {"<2"}}),
+        (["pa", "pb"], {}),
+        (["urldep", "a"], {}),  # c is a direct URL first, so the walk never looks up a's c>=1 either
+    ],
+)
+def test_prefetch_keeps_results_and_request_counts_identical(index, specs, constraints):
+    roots = [Requirement(spec) for spec in specs]
+
+    def run(prefetch):
+        index.clear()
+        resolver = Resolver(prefetch=prefetch)
+        try:
+            result = resolver.resolve(roots, WIN, constraints)
+        except DepsError as error:
+            result = str(error)
+        return result, Counter(index)
+
+    sequential, sequential_calls = run(False)
+    parallel, parallel_calls = run(True)
+    assert parallel == sequential
+    assert parallel_calls == sequential_calls
+    assert all(count == 1 for count in parallel_calls.values())
+
+
+def test_prefetch_fetches_sibling_metadata_concurrently(index, monkeypatch):
+    barrier = Barrier(2, timeout=5)
+    fetch_text = pypi.fetch_text
+
+    def together(url, **kwargs):
+        if "/a-" in url or "/b-" in url:
+            barrier.wait()
+        return fetch_text(url, **kwargs)
+
+    monkeypatch.setattr(pypi, "fetch_text", together)
+    tree = Resolver().resolve([Requirement("a"), Requirement("b")], WIN)
+    assert tree.errors == {}
+    assert tree.chosen["c"] == "1.5"
+
+
+def test_prefetch_metadata_failure_does_not_fetch_unused_platform_wheel(index, monkeypatch):
+    fetch_text = pypi.fetch_text
+
+    def broken(url, **kwargs):
+        if "/agree-" in url and WIN_AMD in url:
+            index.append(url)
+            raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+        return fetch_text(url, **kwargs)
+
+    monkeypatch.setattr(pypi, "fetch_text", broken)
+    roots = [Requirement("agree"), Requirement("app")]
+    sequential = Resolver(prefetch=False).resolve(roots, WIN)
+    sequential_calls = Counter(index)
+    index.clear()
+    parallel = Resolver().resolve(roots, WIN)
+    assert parallel == sequential
+    assert Counter(index) == sequential_calls
+
+
+def test_prefetch_does_not_refetch_cached_sdist_requirements(index):
+    resolver = Resolver()
+    resolver.requires("sdistonly", "1.0", WIN)
+    index.clear()
+    resolver.resolve([Requirement("sdistonly")], WIN)
+    assert not any("/sdistonly/" in url for url in index)
+
+
+def test_prefetch_stops_before_the_package_limit(index, monkeypatch):
+    monkeypatch.setattr(deps, "MAX_PACKAGES", 1)
+    roots = [Requirement("a"), Requirement("b"), Requirement("app")]
+
+    def run(prefetch):
+        index.clear()
+        with pytest.raises(DepsError, match="more than 1 packages"):
+            Resolver(prefetch=prefetch).resolve(roots, WIN)
+        return Counter(index)
+
+    assert run(True) == run(False)
 
 
 def test_cli_checks_what_the_names_install(index, capsys):
