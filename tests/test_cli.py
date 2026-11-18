@@ -1,5 +1,6 @@
 import json
 import platform
+import shutil
 import sys
 import sysconfig
 from pathlib import Path
@@ -2691,8 +2692,9 @@ def test_pyproject_extra_adds_optional_dependencies(capsys, fake_pypi, tmp_path,
     "text,flags,error",
     [
         (LIB_PYPROJECT, ["--extra", "docs"], "unknown extras: docs"),
-        (LIB_PYPROJECT, ["--group", "dev"], "unknown dependency groups: dev"),
-        (LIB_PYPROJECT, ["--no-dev"], "--no-dev does not apply to pyproject.toml"),
+        (LIB_PYPROJECT, ["--group", "dev"], "unknown groups: dev"),
+        (LIB_PYPROJECT, ["--group", "zeta", "--only-group", "alpha"], "unknown groups: alpha, zeta"),
+        (LIB_PYPROJECT, ["--no-dev"], "--no-dev doesn't apply to pyproject.toml"),
         ('[project]\nname = "x"\ndynamic = ["dependencies"]\n', [], "dependencies is dynamic"),
         (
             '[project]\nname = "x"\ndependencies = []\ndynamic = ["optional-dependencies"]\n',
@@ -2718,7 +2720,10 @@ def test_pyproject_input_errors_exit_2(capsys, fake_pypi, tmp_path, text, flags,
         (["--only-group", "test"], {"nowheels"}),
         (["--only-group", "test", "--group", "docs"], {"nowheels", "purewheel"}),
         (["--group", "QA_Group"], {"ranged", "fastlib", "nowheels", "purewheel"}),
-        (["--only-group", "self"], {"nowheels"}),
+        # A requirement on the project itself installs the project: its dependencies, plus any extra it names.
+        (["--only-group", "self"], {"ranged", "fastlib", "nowheels"}),
+        (["--only-group", "bare-self"], {"ranged", "fastlib"}),
+        (["--only-group", "via-alias"], {"nowheels", "purewheel"}),  # a non-normalized include-group name
     ],
 )
 def test_pyproject_dependency_groups(capsys, fake_pypi, tmp_path, flags, expected):
@@ -2727,7 +2732,7 @@ def test_pyproject_dependency_groups(capsys, fake_pypi, tmp_path, flags, expecte
         LIB_PYPROJECT + "\n[dependency-groups]\n"
         'test = ["nowheels", "nowheels"]\ndocs = ["purewheel==3.1"]\n'
         'qa-group = [{include-group = "test"}, {include-group = "docs"}]\n'
-        'self = ["MyLib[test]"]\n',
+        'self = ["MyLib[test]"]\nbare-self = ["mylib"]\nvia-alias = [{include-group = "QA_Group"}]\n',
         encoding="utf-8",
     )
     code, out, _ = run(capsys, str(path), "-p", "3.13", "-t", "linux-x86_64", "--json", *flags)
@@ -2742,7 +2747,9 @@ def test_pyproject_dependency_groups(capsys, fake_pypi, tmp_path, flags, expecte
     "groups,flags,error",
     [
         ('test = [{include-group = "other"}]\nother = [{include-group = "test"}]', [], "cycle"),
-        ('test = [{include-group = "absent"}]', [], "unknown dependency groups: absent"),
+        ('test = [{include-group = "absent"}]', [], "dependency group 'test' includes unknown group 'absent'"),
+        ('test = [{include-group = "test"}]', [], "cycle"),
+        ('test = ["-e ."]', [], "can't parse requirement '-e .'"),
         ("test = [42]", [], "entry"),
         ("test = [{include-group = 42}]", [], "entry"),
         ('test = [{include-group = "other", unexpected = true}]', [], "entry"),
@@ -2757,6 +2764,49 @@ def test_pyproject_dependency_group_errors(capsys, fake_pypi, tmp_path, groups, 
     code, _, err = run(capsys, str(path), "-p", "3.13", "-t", "linux-x86_64", "--group", "test", *flags)
     assert code == 2 and error in err
     assert not fake_pypi
+
+
+def test_pyproject_dependency_groups_are_validated_only_when_selected(capsys, fake_pypi, tmp_path):
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        LIB_PYPROJECT + "\n[dependency-groups]\n"
+        'test = ["nowheels"]\nbroken = [42]\nnotalist = "x"\nloop = [{include-group = "loop"}]\n'
+        'missing = [{include-group = "absent"}]\nunparsable = ["-e ."]\n',
+        encoding="utf-8",
+    )
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "linux-x86_64", "--json", "--group", "test")
+    assert code == 1, err
+    assert {row["name"] for row in json.loads(out)["packages"]} == {"ranged", "fastlib", "nowheels"}
+
+
+def test_pyproject_dependency_group_marker_is_checked_per_target(capsys, fake_pypi, tmp_path):
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        '[project]\nname = "mylib"\ndependencies = []\n[dependency-groups]\n'
+        'win = ["winonly; sys_platform == \'win32\'", "purewheel==3.1"]\n',
+        encoding="utf-8",
+    )
+    code, out, _ = run(capsys, str(path), "-p", "3.13", "-t", "linux-x86_64,win-amd64", "--json", "--group", "win")
+    assert code == 0
+    rows = {row["name"]: row for row in json.loads(out)["packages"]}
+    assert rows["winonly"]["results"] == {"linux-x86_64": "n/a", "win-amd64": "wheel"}
+    assert rows["purewheel"]["results"] == {"linux-x86_64": "wheel", "win-amd64": "wheel"}
+
+
+def test_pyproject_and_uv_lock_take_the_same_group(capsys, fake_pypi, fixtures, tmp_path):
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "locked").mkdir()
+    shutil.copy(fixtures / "uvselect" / "uv.lock", tmp_path / "locked")
+    path = tmp_path / "lib" / "pyproject.toml"
+    path.write_text(
+        LIB_PYPROJECT + '\n[dependency-groups]\ndocs = ["purewheel==3.1"]\ntest = ["nowheels"]\n', encoding="utf-8"
+    )
+    lock = tmp_path / "locked" / "uv.lock"
+    code, out, err = run(capsys, str(path), str(lock), "-p", "3.13", "-t", "linux-x86_64", "--json", "--group", "docs")
+    assert code == 1, err
+    names = {row["name"] for row in json.loads(out)["packages"]}
+    assert {"ranged", "fastlib", "purewheel", "common", "docstool"} <= names
+    assert not names & {"nowheels", "gpu"}  # neither the pyproject.toml's test group nor the lock's gpu extra
 
 
 @pytest.mark.usefixtures("index")

@@ -220,7 +220,10 @@ def make_parser() -> argparse.ArgumentParser:
         "--group",
         action="append",
         metavar="NAME",
-        help="include a dependency group (uv.lock, Poetry 2.x poetry.lock, pdm.lock; repeatable)",
+        help=(
+            "include a dependency group (uv.lock, Poetry 2.x poetry.lock, pdm.lock, or pyproject.toml "
+            "[dependency-groups]; repeatable)"
+        ),
     )
     p.add_argument(
         "--no-dev", action="store_true", help="exclude the dev group (uv.lock, Poetry 2.x poetry.lock, pdm.lock)"
@@ -1967,7 +1970,7 @@ def _main(argv: list[str], project: Path | None = None) -> int:
         if pyproject_sources:
             if args.no_dev:
                 raise SourceError(
-                    "--no-dev does not apply to pyproject.toml: no dependency group is selected by default"
+                    "--no-dev doesn't apply to pyproject.toml: no dependency group is selected by default"
                 )
             if args.only_group and (args.extra or args.all_extras):
                 raise SourceError(
