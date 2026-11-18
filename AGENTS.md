@@ -28,7 +28,7 @@ uv run --group dev pytest
 | --- | --- |
 | `cli.py` | Command line: arguments, `[tool.wheelgap]` config, text / `--json` / `--markdown` output, exit codes |
 | `api.py` | Python API (`make_targets`, `check_package(s)`, `check_lockfile`) |
-| `sources.py` | Reads inputs: `uv.lock`, `pylock.toml`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`, `pixi.lock` (with a strict reader for the YAML subset pixi writes), requirements files |
+| `sources.py` | Reads inputs: `uv.lock`, `pylock.toml`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`, `pixi.lock` (with a strict reader for the YAML subset pixi writes), requirements files, conda `environment.yml` files (their `pip:` list, through that YAML reader's `comments=True` mode) |
 | `targets.py` | Targets (Python × platform) and the wheel tags each accepts |
 | `check.py` | The status per package and target (`wheel`, `source`, `missing`, `unknown`, `n/a`, `bundled`) and `--explain` reasons |
 | `pypi.py` | The only HTTP client (`fetch_json`: retries, https-only redirects; `fetch_sdist_pyproject` reads an sdist's `pyproject.toml` as pip would) and the PyPI lookups (`fill`, `fill_all`, `recheck_lock`) |
@@ -47,7 +47,7 @@ uv run --group dev pytest
 | `logsafe.py` | Keeps input text from running as a GitHub Actions workflow command: the CLI's and `diff`'s stdout and stderr go through `CommandGuard` |
 | `scan.py` | `python -m wheelgap.scan`: the data behind the [coverage tracker](https://wheelgap.github.io/tracker/) |
 | `diff.py` | `python -m wheelgap.diff OLD NEW`: packages that got worse between two lockfiles, and new packages with gaps |
-| `mcp.py` | `wheelgap-mcp` / `python -m wheelgap.mcp` / `wheelgap mcp` (dispatched from `cli.py`): an MCP server over stdio (stdlib JSON-RPC, no MCP SDK) with `check_package`, `check_lockfile`, `check_dockerfile`, `check_dist`, `diff_lockfiles` and `list_targets` tools |
+| `mcp.py` | `wheelgap-mcp` / `python -m wheelgap.mcp` / `wheelgap mcp` (dispatched from `cli.py`): an MCP server over stdio (stdlib JSON-RPC, no MCP SDK) with `check_package`, `check_lockfile`, `check_dockerfile`, `check_dist`, `diff_lockfiles`, `suggest_targets` and `list_targets` tools |
 
 ## Tests
 

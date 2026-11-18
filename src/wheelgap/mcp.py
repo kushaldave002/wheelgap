@@ -21,6 +21,7 @@ Tools (all read-only; they look packages up on PyPI, or the index in WHEELGAP_IN
 - check_dist: what `wheelgap --dist DIR --json` reports for the release about to be uploaded, plus the targets
   the previous release on PyPI had a wheel for that this one drops.
 - diff_lockfiles: what `wheelgap diff OLD NEW --json` reports (the packages that got worse, and new ones with gaps).
+- suggest_targets: targets and Python versions named in a project's workflows, GitLab CI and Dockerfiles, without lookups.
 - list_targets: the platform names the other tools accept.
 
 Paths may be file:// URIs. If the client has the roots capability, the server asks it for roots/list after
@@ -34,6 +35,7 @@ path must then be in one of those roots (unless the list is empty): it is never 
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import io
 import json
 import os
@@ -58,6 +60,7 @@ from .check import EXPLAIN_LIMIT, Status
 from .dockerfile import DockerfileError, read_dockerfile
 from .pyodide import PyodideLockError, load_pyodide_lock
 from .sources import SourceError
+from .suggest_targets import suggest, to_json
 from .targets import (
     ALIASES,
     DEFAULT_GLIBC,
@@ -115,7 +118,8 @@ INSTRUCTIONS = (
     "wheel anywhere (save the old lockfile under its own name first, e.g. `mkdir -p /tmp/old && git show "
     "HEAD:uv.lock > /tmp/old/uv.lock`). Pass the project's Python version: results "
     "differ between versions. Linux results assume a glibc (manylinux) or musl version: pass the one your image or "
-    "distro has."
+    "distro has. If the user hasn't said which platforms they deploy to, call suggest_targets on the project folder "
+    "and confirm its suggestions with them."
 )
 
 _STATUS_HELP = (
@@ -369,7 +373,7 @@ TOOLS: list[dict[str, Any]] = [
             " private index) counts as worse; 'unchecked' names packages unknown on both sides at the same version. "
             "Pass the old lockfile as 'old' under its own file name, since the name says how to read it: e.g. `mkdir -p"
             " /tmp/old && git show HEAD:uv.lock > /tmp/old/uv.lock` (this works after the upgrade too, until it's "
-            "committed). As with `wheelgap diff`, the project's [tool.wheelgap] settings don't apply: pass python and "
+            "committed). Unlike `wheelgap diff`, the project's [tool.wheelgap] settings don't apply: pass python and "
             "targets. " + _STATUS_HELP
         ),
         "inputSchema": {
@@ -390,6 +394,27 @@ TOOLS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
         "annotations": _READ_ONLY,
+    },
+    {
+        "name": "suggest_targets",
+        "title": "Suggest a project's targets",
+        "description": "Read a project's GitHub Actions workflows, .gitlab-ci.yml and Dockerfiles to suggest targets and "
+        "Python "
+        "versions, with the file and line for each, unreadable inputs and suggested config. Reads local files only; "
+        "nothing is changed or checked. Confirm the suggestions with the user before checking their project.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute path or file:// URI of the project folder (a relative path is looked "
+                    "for in the client's roots if it shares them, else in the server's working directory).",
+                },
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        "annotations": _READ_ONLY | {"openWorldHint": False},
     },
     {
         "name": "list_targets",
@@ -907,6 +932,36 @@ def _run_cli(argv: list[str], path: Path, *, positional: bool = True, project: P
     return result
 
 
+def _suggest_targets(args: dict[str, Any]) -> dict[str, Any]:
+    _check_keys("suggest_targets", args)
+    folder = _existing(_string(args, "path", required=True) or "")
+    if _root_or_home(folder):  # walking all of it would read every project's files, slowly
+        raise ToolError(f"{_clip(str(folder))}: pass the project folder, not / or your home folder")
+    try:
+        found = suggest(folder)
+    except OSError as e:
+        raise ToolError(str(e)) from e
+    # Reasons can quote a workflow's or Dockerfile's text: keep what reaches the model bounded.
+    found.unreadable = [dataclasses.replace(u, reason=_clip(u.reason)) for u in found.unreadable]
+    # What a file names (a FROM line, a container image) reaches the model too: bound it the same way.
+    found.targets = [dataclasses.replace(f, source=_clip(f.source)) for f in found.targets]
+    found.pythons = [dataclasses.replace(f, source=_clip(f.source)) for f in found.pythons]
+    return to_json(found)
+
+
+def _root_or_home(folder: Path) -> bool:
+    try:
+        resolved = folder.resolve()
+    except (OSError, RuntimeError):  # a symlink loop: suggest() reports it
+        return False
+    try:
+        home = Path.home().resolve()
+    except (OSError, RuntimeError, KeyError):  # no home folder to be found
+        home = None
+    # The filesystem root, the home folder, or a folder above it (/Users, /home): each walks other people's projects.
+    return resolved == Path(resolved.anchor) or (home is not None and home.is_relative_to(resolved))
+
+
 def _list_targets(args: dict[str, Any]) -> dict[str, Any]:
     _check_keys("list_targets", args)
     return {
@@ -925,6 +980,7 @@ _HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "check_dockerfile": _check_dockerfile,
     "check_dist": _check_dist,
     "diff_lockfiles": _diff_lockfiles,
+    "suggest_targets": _suggest_targets,
     "list_targets": _list_targets,
 }
 
@@ -1311,6 +1367,7 @@ _PATH_ARGUMENTS = {
     "check_dockerfile": ("dockerfile", "path"),
     "check_dist": ("path",),
     "diff_lockfiles": ("old", "new"),
+    "suggest_targets": ("path",),
 }
 
 
