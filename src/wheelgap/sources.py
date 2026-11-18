@@ -1181,6 +1181,43 @@ def parse_pyproject(path: Path) -> Source:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as e:
         raise SourceError(f"{path}: invalid TOML: {e}") from None
+    return _project_source(data, path)
+
+
+# Canonical expression from the inline script metadata specification (PEP 723):
+# https://packaging.python.org/en/latest/specifications/inline-script-metadata/
+_SCRIPT_BLOCK = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
+
+
+def parse_script(path: Path) -> Source:
+    """Read one PEP 723 script block; never execute the Python file."""
+    text = path.read_text(encoding="utf-8")
+    blocks = [
+        block
+        for start in re.finditer(r"(?m)^# /// script$", text)
+        if (block := _SCRIPT_BLOCK.match(text, start.start())) is not None
+    ]
+    if len(blocks) != 1:
+        reason = "no script metadata block" if not blocks else "multiple script metadata blocks"
+        raise SourceError(f"{path}: {reason}")
+    content = "".join(
+        line[2:] if line.startswith("# ") else line[1:] for line in blocks[0].group("content").splitlines(keepends=True)
+    )
+    try:
+        data = tomllib.loads(content)
+    except tomllib.TOMLDecodeError as e:
+        raise SourceError(f"{path}: invalid TOML in script metadata: {e}") from None
+    return _project_source(
+        {
+            "project": {key: data[key] for key in ("dependencies", "requires-python") if key in data},
+            "tool": data.get("tool", {}),
+        },
+        path,
+    )
+
+
+def _project_source(data: dict, path: Path) -> Source:
+    """Shared requirement and provenance handling for project and script metadata."""
     project = data.get("project")
     if not isinstance(project, dict):
         raise SourceError(f"{path}: no [project] table, so there are no dependencies to read")
@@ -2162,6 +2199,7 @@ def check_report_targets(source: Source, targets: Iterable[Target]) -> None:
 
 READERS = {
     "pyproject": parse_pyproject,
+    "script": parse_script,
     "uv": parse_uv_lock,
     "pylock": parse_pylock,
     "poetry": parse_poetry_lock,
@@ -2207,6 +2245,8 @@ def file_kind(path: Path) -> str:
     name = path.name
     if name == "pyproject.toml":
         return "pyproject"
+    if name.endswith(".py"):
+        return "script"
     if name in PARSERS:
         return PARSERS[name]
     if name.startswith("pylock.") and name.endswith(".toml"):

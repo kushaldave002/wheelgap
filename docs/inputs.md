@@ -21,6 +21,7 @@ wheelgap psycopg2 numpy==2.3.4    # package names, with or without a version
 | [requirements files](#requirements-files) | no | with `--deps` |
 | [pip installation report](#pip-installation-report) | no | no |
 | [`pyproject.toml`](#pyprojecttoml) | no | with `--deps` |
+| [Python scripts](#python-scripts) | no | with `--deps` |
 | [package names](#package-names) | no | with `--deps` |
 
 "Read without network" means the lockfile records every file published for each pinned version, so wheelgap
@@ -50,6 +51,7 @@ A **file** is read by its name:
 | `requirements*.lock`, `*.txt`, `*.in` | a requirements file |
 | `*.json` | a pip installation report |
 | `pyproject.toml` | a project's direct dependencies |
+| `*.py` | a script's PEP 723 inline dependencies |
 
 Any other name is an error. An argument that isn't an existing file or directory is read as a
 [package name](#package-names), unless it contains `/` or ends in `.lock`, `.txt`, `.toml`, `.json` or `.in`, which is an error
@@ -331,3 +333,21 @@ newest release that meets every constraint, supports that target's Python and is
 when constraints only a backtracking resolver could untangle come up, it stops with an error instead of guessing, and a
 release whose dependencies it can't read is `unknown`. A lockfile from `uv lock` or `pip-compile` is exact, so prefer
 one when you have it. See [`--deps`](cli.md#deps).
+
+
+## Python scripts
+
+An existing `.py` file is read for one `# /// script` block using
+[PEP 723 inline script metadata](https://packaging.python.org/en/latest/specifications/inline-script-metadata/).
+The script is never executed. No block, multiple complete blocks or invalid TOML is an input error.
+
+```bash
+wheelgap example.py -t win-arm64
+wheelgap example.py --deps -t win-arm64
+```
+
+`dependencies` lists the direct requirements; add `--deps` to check their transitive dependencies too,
+as installed by `uv run example.py`. `requires-python` produces the same note as a project's metadata
+when it excludes a requested Python. Index settings in the block's `[tool.uv]` prevent treating it as
+PyPI-only. A nonexistent name such as `discord.py` remains a package name. Locked scripts
+(`example.py.lock`) are not read by this input format.

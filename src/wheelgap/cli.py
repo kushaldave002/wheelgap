@@ -2124,8 +2124,13 @@ def _main(argv: list[str], project: Path | None = None) -> int:
             if source.deps_paths is None:
                 print(
                     f"wheelgap: note: {source.label} lists direct dependencies only; "
-                    "their own dependencies aren't checked (use a lockfile for that, or add --deps for PyPI), "
-                    "and ranges were checked at the newest matching release",
+                    + (
+                        "their own dependencies aren't checked "
+                        "(add --deps to check what the script installs from PyPI), "
+                        if source.kind == "script"
+                        else "their own dependencies aren't checked (use a lockfile for that, or add --deps for PyPI), "
+                    )
+                    + "and ranges were checked at the newest matching release",
                     file=sys.stderr,
                 )
             if source.requires_python and not quiet:  # the answer is right either way, so -q drops these

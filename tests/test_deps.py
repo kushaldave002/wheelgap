@@ -951,3 +951,12 @@ def test_diff_deps_extras_and_index_variables(index, monkeypatch, capsys):
     monkeypatch.setenv("UV_INDEX_URL", "https://example.com/simple")
     assert diff_main(args) == 2
     assert json.loads(capsys.readouterr().out)["error"]["type"] == "SourceError"
+
+
+def test_script_deps_resolve_what_it_installs(index, capsys, tmp_path):
+    script = tmp_path / "example.py"
+    script.write_text('# /// script\n# dependencies = ["app==1.0"]\n# ///\n', encoding="utf-8")
+    assert main([str(script), "--deps", "-p", "3.14", "-t", "win-arm64", "--json"]) == 1
+    out, err = capsys.readouterr()
+    assert {p["name"] for p in json.loads(out)["packages"]} == {"app", "lib", "crypt", "winonly"}
+    assert "direct dependencies only" not in err
