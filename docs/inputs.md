@@ -1,6 +1,7 @@
 # Inputs
 
-wheelgap takes one or more inputs: lockfiles, requirements files, a `pyproject.toml`, directories, or package names.
+wheelgap takes one or more inputs: lockfiles, requirements files, a `pyproject.toml`, a script with a `# /// script`
+block, directories, or package names.
 With no input it reads the current directory.
 
 ```bash
@@ -51,7 +52,7 @@ A **file** is read by its name:
 | `requirements*.lock`, `*.txt`, `*.in` | a requirements file |
 | `*.json` | a pip installation report |
 | `pyproject.toml` | a project's direct dependencies |
-| `*.py` | a script's PEP 723 inline dependencies |
+| `*.py` | a script's `# /// script` block (PEP 723) |
 
 Any other name is an error. An argument that isn't an existing file or directory is read as a
 [package name](#package-names), unless it contains `/` or ends in `.lock`, `.txt`, `.toml`, `.json` or `.in`, which is an error
@@ -312,6 +313,42 @@ listed in `[project] dynamic` is an input error (exit 2), as are dynamic `option
 `--extra`/`--all-extras` and Poetry dependencies kept in `[tool.poetry.dependencies]` (check `poetry.lock` instead).
 `check_lockfile()` and `wheelgap diff` don't read `pyproject.toml` as an input.
 
+## Python scripts
+
+A single-file script can declare what it needs in a `# /// script` block
+([PEP 723 inline script metadata](https://packaging.python.org/en/latest/specifications/inline-script-metadata/)),
+which `uv run` and `pipx run` install before running it. Pass the `.py` file to check those dependencies:
+
+```python
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "rich"]
+# ///
+```
+
+```bash
+wheelgap example.py -t win-arm64
+# Resolve what the dependencies install
+wheelgap example.py --deps -t win-arm64 --explain
+```
+
+The script is never run or imported: wheelgap finds the blocks with the specification's regular expression and reads
+the `script` one as TOML. A file with no `script` block, two `script` blocks, invalid TOML or a file that isn't UTF-8
+is an input error (exit 2); a `# /// script` line inside another block's content isn't a block of its own.
+
+`dependencies` is read like `[project] dependencies` in a [`pyproject.toml`](#pyprojecttoml): only the direct
+requirements are checked, with a note saying so, unless you add [`--deps`](cli.md#deps) to resolve what they install
+for each target. If `requires-python` leaves out a `-p` Python, that target is still checked and a note names it.
+A script has no extras or dependency groups, so `--extra`, `--group`, `--only-group` and `--no-dev` are errors here.
+
+If the block's `[tool.uv]` sets an index or sources (or a `uv.toml` or `pyproject.toml` beside the script or above it
+does), its packages may not be PyPI's: `--deps` refuses the script, and their names aren't sent to the services other
+flags use ([which names leave the run](how-it-works.md#pypi-origin)). [`--fix`](cli.md#fix) gives the `[tool.uv]`
+lines to add to the block for `uv run`. wheelgap doesn't read a script's lock (`example.py.lock`, from
+`uv lock --script`) yet. Without `--deps`, `check_lockfile()` and `wheelgap diff` don't read a script.
+
+A `.py` argument that isn't an existing file, such as `discord.py`, is still a [package name](#package-names).
+
 ## Package names
 
 Without a lockfile, name the packages, with or without a version or range:
@@ -333,21 +370,3 @@ newest release that meets every constraint, supports that target's Python and is
 when constraints only a backtracking resolver could untangle come up, it stops with an error instead of guessing, and a
 release whose dependencies it can't read is `unknown`. A lockfile from `uv lock` or `pip-compile` is exact, so prefer
 one when you have it. See [`--deps`](cli.md#deps).
-
-
-## Python scripts
-
-An existing `.py` file is read for one `# /// script` block using
-[PEP 723 inline script metadata](https://packaging.python.org/en/latest/specifications/inline-script-metadata/).
-The script is never executed. No block, multiple complete blocks or invalid TOML is an input error.
-
-```bash
-wheelgap example.py -t win-arm64
-wheelgap example.py --deps -t win-arm64
-```
-
-`dependencies` lists the direct requirements; add `--deps` to check their transitive dependencies too,
-as installed by `uv run example.py`. `requires-python` produces the same note as a project's metadata
-when it excludes a requested Python. Index settings in the block's `[tool.uv]` prevent treating it as
-PyPI-only. A nonexistent name such as `discord.py` remains a package name. Locked scripts
-(`example.py.lock`) are not read by this input format.

@@ -34,6 +34,7 @@ from .sources import (
     Source,
     SourceError,
     check_report_targets,
+    file_kind,
     find_lockfile,
     load_file,
     pythons_outside_lock,
@@ -416,14 +417,14 @@ def check_lockfile(
     looked up on the index (keeping the lock's files if a lookup fails).
     Requirements ranges resolve separately for each target Python major/minor. Distinct resolutions return
     separate Results with their own version and eligible files; targets using another resolution are NOT_NEEDED.
-    deps=True resolves the dependency tree for requirements files and pyproject.toml inputs from PyPI metadata,
-    as --deps does: one Result per package in the tree, with `via` giving each gap target's path from a direct
-    dependency. A tree that can't be resolved raises DepsError (a SourceError). With deps=True, pyproject.toml
-    (and a project directory containing only one) is accepted; lockfile inputs (uv.lock, poetry.lock, ...) and
-    offline=True are refused. Requirements that aren't index packages (-e ., local paths, URLs) can't be
-    resolved from PyPI: with deps=True they raise SourceError, unless the file is compiled with hashes (it already
-    pins what they install) or allow_skipped=True is passed to check the rest. allow_skipped does nothing without
-    deps=True.
+    deps=True resolves the dependency tree for requirements files, pyproject.toml and script (PEP 723
+    `# /// script`) inputs from PyPI metadata, as --deps does: one Result per package in the tree, with `via` giving
+    each gap target's path from a direct dependency. A tree that can't be resolved raises DepsError (a
+    SourceError). With deps=True, pyproject.toml (and a project directory containing only one) and a script are
+    accepted; lockfile inputs (uv.lock, poetry.lock, ...) and offline=True are refused. Requirements that aren't
+    index packages (-e ., local paths, URLs) can't be resolved from PyPI: with deps=True they raise SourceError,
+    unless the file is compiled with hashes (it already pins what they install) or allow_skipped=True is passed to
+    check the rest. allow_skipped does nothing without deps=True.
     With offline=True, only locked files are used: inputs needing an index lookup raise SourceError, and the
     other-Python recheck is skipped. Locked files may therefore omit wheels for those Python versions.
     online=True and offline=True cannot be combined.
@@ -471,10 +472,15 @@ def _check_lockfile(
     else:
         lockfile = p
 
-    if lockfile.name == "pyproject.toml" and not deps:
+    try:
+        kind: str | None = file_kind(lockfile)
+    except SourceError:
+        kind = None  # load_file says why (no such file, or a name it can't read)
+    if kind in ("pyproject", "script") and not deps:
+        what = "a pyproject.toml" if kind == "pyproject" else "a script's # /// script block"
         raise SourceError(
-            f"{lockfile}: a pyproject.toml lists direct dependencies only, so check_lockfile() and "
-            "wheelgap.diff don't read it; pass a lockfile (the wheelgap command checks a pyproject.toml)"
+            f"{lockfile}: {what} lists direct dependencies only, so check_lockfile() and "
+            f"wheelgap.diff don't read it; pass a lockfile (the wheelgap command checks {what})"
         )
     source: Source = load_file(lockfile, environment)
     if environment is not None and source.kind != "pixi":
@@ -483,29 +489,31 @@ def _check_lockfile(
     if deps:
         if not (source.specs or source.pyproject_extras is not None):
             raise SourceError(
-                "--deps applies to package names on the command line, requirements files or pyproject.toml; "
-                "a lockfile already lists what it installs"
+                "--deps applies to package names on the command line, requirements files, pyproject.toml or a "
+                "script's # /// script block; a lockfile already lists what it installs"
             )
         if offline:
             raise SourceError(
                 "offline=True: deps=True would look packages up on PyPI; pass deps=False, or set offline=False"
             )
+        # wheelgap can't read a script's lock (example.py.lock), so a script gets no lockfile advice.
+        instead = "" if source.kind == "script" else ", so check a lockfile instead"
         if not source.pypi_only:
+            what = "the script" if source.kind == "script" else "the project"
             raise SourceError(
-                f"{source.label}: the project configures an installer index or source; "
-                "--deps uses only PyPI, so check a lockfile instead"
+                f"{source.label}: {what} configures an installer index or source; --deps uses only PyPI{instead}"
             )
         if (env := origin.index_env()) is not None:
             raise SourceError(
-                f"{source.label}: {env} may point pip or uv at another index, and --deps uses only PyPI, "
-                "so check a lockfile instead"
+                f"{source.label}: {env} may point pip or uv at another index, and --deps uses only PyPI" + instead
             )
         if not pinned_complete(source):
             # A compiled file already pins what these install; anything else would be resolved without them.
             if not allow_skipped and (skipped := [p for p in source.packages if p.skip]):
                 raise SourceError(
                     f"{source.label}: deps=True can't check what non-index packages install: "
-                    f"{skipped_list(skipped)}; pass allow_skipped=True to check the rest, or check a lockfile"
+                    f"{skipped_list(skipped)}; pass allow_skipped=True to check the rest"
+                    + ("" if source.kind == "script" else ", or check a lockfile")
                 )
             if source.deps_blockers:
                 raise SourceError(

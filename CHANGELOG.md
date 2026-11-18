@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Check existing Python scripts with PEP 723 inline dependencies; add `--deps` to include what those dependencies install. (#512, thanks [@kushaldave002](https://github.com/kushaldave002))
+- `wheelgap script.py` reads a script's PEP 723 `# /// script` block (`uv run`, `pipx run`) and checks its `dependencies` as it does a `pyproject.toml`'s, without running the script: `--deps` resolves what they install, a `requires-python` that leaves out a `-p` Python gets a note, and `--fix` gives the `[tool.uv]` lines to add to the block. An index in the block's `[tool.uv]` makes `--deps` refuse it. (#512, thanks [@kushaldave002](https://github.com/kushaldave002))
 - The pre-commit hook also runs when `pyproject.toml`, `uv.toml`, or `.python-version` changes, so edits to `[tool.wheelgap]`, `[tool.uv]`, or the default Python trigger a check without waiting for a lockfile change. (#500, thanks [@kushaldave002](https://github.com/kushaldave002))
 - `wheelgap diff` accepts `--ios X.Y` and `--android-api N` to set the minimum iOS version and Android API level for mobile targets, matching the main command. (#499, thanks [@kushaldave002](https://github.com/kushaldave002))
 - A missing `*.in` requirements file now reports `no such file` instead of treating its name as a PyPI package; input docs also list pip JSON reports. (#497, thanks [@AdityaSreevatsaK](https://github.com/AdityaSreevatsaK))

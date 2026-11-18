@@ -119,7 +119,8 @@ rule, shared by the five, and it holds when all of these do:
     - **The input names no other index.** That's package names, a requirements file with no `-i`/`--index-url`,
       `--extra-index-url`, `-f`/`--find-links` or `--no-index` option (in any form pip reads, in it or in the files it
       pulls in with `-r` and `-c`), a `pyproject.toml` with no index or sources in `[tool.uv]`, `[tool.uv.pip]`,
-      `[tool.poetry]`, `[tool.pdm]` or `[tool.pixi.pypi-options]`, or a `Pipfile.lock` whose sources are all PyPI. A
+      `[tool.poetry]`, `[tool.pdm]` or `[tool.pixi.pypi-options]`, a script whose `# /// script` block has none in
+      its `[tool.uv]`, or a `Pipfile.lock` whose sources are all PyPI. A
       `-c` file that isn't read (a URL or `${VAR}`) or an abbreviated `--requirement`/`--constraint` option counts as
       naming one.
     - **No `uv.toml`, `pyproject.toml` or `pdm.toml` sets an index** in the input's folder or a folder above it, up to

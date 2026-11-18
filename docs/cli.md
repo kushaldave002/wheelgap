@@ -6,8 +6,8 @@ wheelgap diff [-p VER] [-t PLATFORM] [--glibc X.Y] [--musl X.Y] [--distro NAME] 
 wheelgap mcp            (or wheelgap-mcp)
 ```
 
-`INPUT` is a lockfile, a requirements file, a `pyproject.toml`, a directory, or package specs such as `numpy==2.3.4`
-(default: the current directory). See [Inputs](inputs.md).
+`INPUT` is a lockfile, a requirements file, a `pyproject.toml`, a script with a `# /// script` block (PEP 723), a
+directory, or package specs such as `numpy==2.3.4` (default: the current directory). See [Inputs](inputs.md).
 
 Flags that take a list (`-p`, `-t`, `--extra`, `--group`, `--only-group`, `--ignore`, `--advisory`)
 can be repeated; `-p`, `-t`, `--ignore` and `--advisory` also take comma-separated values. Flags win over
@@ -162,8 +162,8 @@ since PyPI's project of that name may not be yours. If the previous release coul
 comparison didn't run; both notes show even with `-q`, so a gate that didn't compare never passes silently.
 ### `--deps` {#deps}
 
-For package names on the command line, requirements files and dependencies declared in
-`pyproject.toml`, also check what they install.
+For package names on the command line, requirements files, and dependencies declared in
+`pyproject.toml` or a script's `# /// script` block, also check what they install.
 For a project file, this includes any extras you select with `--extra` or `--all-extras`. wheelgap resolves the
 tree for each target from PyPI's metadata: for each requirement, the newest release that meets every constraint on it,
 supports the target's Python and isn't yanked (a yanked release only for an `==` pin), following markers and extras as
@@ -350,7 +350,8 @@ empty `FILE` is an error, as for `--junit`.
 
 After the usual output, say which gaps a wheel on wheelgap's [gap wheel index](https://wheelgap.github.io/wheels/)
 fills, and how to install from it: a `[tool.uv.index]` and `[tool.uv.sources]` snippet for `pyproject.toml` with a
-uv.lock input, and an `--extra-index-url` line for pip otherwise. A cell counts only when it's `source` or `missing`
+uv.lock input, the same entries for the `# /// script` block of a script, and an `--extra-index-url` line for
+pip otherwise. A cell counts only when it's `source` or `missing`
 (and not `--ignore`d), the package passes [the PyPI-origin rule](how-it-works.md#pypi-origin), and the index has a
 wheel of exactly that version whose tags the target accepts. It reads the index's list from wheelgap.github.io in one
 request that names no package, and only when a gap could use it. A list it could read is kept in the 24-hour
@@ -365,7 +366,8 @@ With `--explain` too (**after 0.13.0**), each package a gap wheel fills gets a `
 target, naming the targets it fills and saying the wheel is unofficial: built by wheelgap from the PyPI sdist, not from
 the package's maintainers. For inputs pip installs from as they are (a requirements file, a `pyproject.toml`, a pip
 report or package names) it gives the `pip install --extra-index-url` command; for a lockfile it points to the
-`--fix` section, since that lockfile's own tool has to pick the index up. With `--json`, each package gets
+`--fix` section, since that lockfile's own tool has to pick the index up, and for a script likewise, since `uv run`
+reads the index from its `# /// script` block. With `--json`, each package gets
 [`gap_wheel`](output.md#fix).
 
 ### `--print-gap-wheel-snippet` {#print-gap-wheel-snippet}
@@ -383,8 +385,8 @@ snippet; when no gap wheel fits, stdout is empty.
   `pyproject.toml`, with a note for each package uv won't take from the index until it's listed as a direct
   dependency. Add them to an existing `[tool.uv.sources]` table rather than a second one, then run `uv lock`.
 
-It refuses, with exit code 2 and before any lookup, more than one input and any other input: `pyproject.toml`,
-`pylock.toml`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`, `pixi.lock` and a pip report. Use `--fix` alone for
+It refuses, with exit code 2 and before any lookup, more than one input and any other input: `pyproject.toml`, a
+script, `pylock.toml`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`, `pixi.lock` and a pip report. Use `--fix` alone for
 those. It can't be used with `--explain` (and its add-ons), `--all`, `--from-log`, `--dist`, `--json`, `--markdown`, `--junit`, `--sarif`, `--badge`,
 `--write-constraints` or `--github-annotations`.
 

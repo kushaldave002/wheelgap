@@ -375,6 +375,55 @@ def test_no_binary_package_isnt_blamed_on_its_origin(capsys, fake_pypi, gap_whee
     assert data["gap_wheels"] == [] and "can't tell they come from PyPI" not in err
 
 
+def test_uv_way_for_a_script_goes_in_its_script_block(capsys, fake_pypi, gap_wheels, tmp_path):
+    gap_wheels.add("nowheels", "0.9", FT_WHEEL)
+    script = tmp_path / "example.py"
+    script.write_text('# /// script\n# dependencies = ["nowheels==0.9"]\n# ///\nprint("hi")\n', encoding="utf-8")
+    args = [str(script), "-p", "3.14t", "-t", "win-arm64"]
+    code_plain, out_plain, _ = run(capsys, *args)
+    code, out, _ = run(capsys, *args, "--fix")
+    assert code == code_plain == 1
+    assert out.removeprefix(out_plain) == (
+        "\n"
+        "wheelgap's gap wheel index has wheels PyPI lacks for:\n"
+        "  nowheels 0.9: win-arm64\n"
+        "\n"
+        "To install them with uv run, add this inside example.py's # /// script block:\n"
+        "\n"
+        "# [[tool.uv.index]]\n"
+        '# name = "wheelgap"\n'
+        f'# url = "{INDEX}"\n'
+        "# explicit = true\n"
+        "#\n"
+        "# [tool.uv.sources]\n"
+        '# nowheels = { index = "wheelgap" }\n'
+        "\n"
+        f"{gapwheels.SCRIPT_MERGE}\n"
+        "\n"
+        "How these wheels are built and checked: https://wheelgap.github.io/wheels/\n"
+    )
+    # No lockfile advice (wheelgap doesn't read example.py.lock) and no pip line: uv run reads the block.
+    assert "pins each file" not in out and "lock again" not in out and "--extra-index-url" not in out
+
+
+def test_script_fix_says_to_list_a_transitive_package_and_renders_in_markdown():
+    fill = _fill("script", "example.py", ["parent", "x"])
+    fill.source.specs.append("parent>=1")
+    text = gapwheels.text_lines([fill], False)
+    assert "To install them with uv run, add this inside example.py's # /// script block:" in text
+    assert '# x = { index = "wheelgap" }' in text
+    assert (
+        'uv only applies [tool.uv.sources] to a script\'s own dependencies, so also list "x" in its dependencies.'
+    ) in text
+    assert not any("pins each file" in line for line in text)
+    md = "\n".join(gapwheels.markdown_lines([fill], False))
+    assert "add this inside `example.py`'s `# /// script` block:\n\n```python\n# [[tool.uv.index]]\n" in md
+    assert '- uv only applies `[tool.uv.sources]` to a script\'s own dependencies, so also list `"x"`' in md
+    assert "pins each file" not in md
+    fill.source.specs.append("x==1")  # listed in the block: no note
+    assert not any("also list" in line for line in gapwheels.text_lines([fill], False))
+
+
 def test_lock_advice_carries_the_private_index_caveat():
     assert gapwheels.LOCK_CAVEAT in gapwheels.text_lines([_fill("poetry", "poetry.lock")], False)
 

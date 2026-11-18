@@ -1190,34 +1190,37 @@ _SCRIPT_BLOCK = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^
 
 
 def parse_script(path: Path) -> Source:
-    """Read one PEP 723 script block; never execute the Python file."""
-    text = path.read_text(encoding="utf-8")
-    blocks = [
-        block
-        for start in re.finditer(r"(?m)^# /// script$", text)
-        if (block := _SCRIPT_BLOCK.match(text, start.start())) is not None
-    ]
-    if len(blocks) != 1:
-        reason = "no script metadata block" if not blocks else "multiple script metadata blocks"
-        raise SourceError(f"{path}: {reason}")
+    """Read a script's one PEP 723 `# /// script` block; never execute the Python file."""
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        raise SourceError(f"{path}: isn't UTF-8, so its # /// script block can't be read") from None
+    # As the specification reads it: every block, of any type, then the `script` ones.
+    blocks = [m for m in _SCRIPT_BLOCK.finditer(text) if m.group("type") == "script"]
+    if not blocks:
+        raise SourceError(f"{path}: no # /// script block, so there are no dependencies to read")
+    if len(blocks) > 1:
+        raise SourceError(f"{path}: more than one # /// script block")
     content = "".join(
         line[2:] if line.startswith("# ") else line[1:] for line in blocks[0].group("content").splitlines(keepends=True)
     )
     try:
         data = tomllib.loads(content)
     except tomllib.TOMLDecodeError as e:
-        raise SourceError(f"{path}: invalid TOML in script metadata: {e}") from None
+        raise SourceError(f"{path}: invalid TOML in the # /// script block: {e}") from None
     return _project_source(
         {
             "project": {key: data[key] for key in ("dependencies", "requires-python") if key in data},
             "tool": data.get("tool", {}),
         },
         path,
+        script=True,
     )
 
 
-def _project_source(data: dict, path: Path) -> Source:
-    """Shared requirement and provenance handling for project and script metadata."""
+def _project_source(data: dict, path: Path, script: bool = False) -> Source:
+    """Shared requirement and provenance handling for project and script metadata (`script`: a # /// script block,
+    which errors name instead of [project])."""
     project = data.get("project")
     if not isinstance(project, dict):
         raise SourceError(f"{path}: no [project] table, so there are no dependencies to read")
@@ -1229,7 +1232,7 @@ def _project_source(data: dict, path: Path) -> Source:
             f"{path}: [project] dependencies is dynamic (set by the build backend), so wheelgap can't read it; "
             "check a lockfile instead"
         )
-    if not project.get("dependencies") and not project.get("optional-dependencies"):
+    if not script and not project.get("dependencies") and not project.get("optional-dependencies"):
         # poetry-core 2 builds [tool.poetry.dependencies] into the package whenever [project] lists no dependencies
         # or optional-dependencies (missing or empty: DependencyGroup.dependencies' "legacy mode").
         tool = data.get("tool")
@@ -1242,7 +1245,8 @@ def _project_source(data: dict, path: Path) -> Source:
             )
     dependencies = project.get("dependencies", [])
     if not isinstance(dependencies, list) or not all(isinstance(d, str) for d in dependencies):
-        raise SourceError(f"{path}: [project] dependencies must be a list of strings")
+        where = "the # /// script block's dependencies" if script else "[project] dependencies"
+        raise SourceError(f"{path}: {where} must be a list of strings")
     optional = project.get("optional-dependencies", {})
     if not isinstance(optional, dict) or not all(
         isinstance(v, list) and all(isinstance(d, str) for d in v) for v in optional.values()
@@ -2262,7 +2266,7 @@ def file_kind(path: Path) -> str:
     raise SourceError(
         f"don't know how to read {path} "
         "(expected uv.lock, pylock.toml, poetry.lock, pdm.lock, Pipfile.lock, pixi.lock, requirements.lock, "
-        "requirements.txt, pip report.json or pyproject.toml)"
+        "requirements.txt, pip report.json, pyproject.toml or a script.py with a # /// script block)"
     )
 
 

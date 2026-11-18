@@ -87,11 +87,11 @@ Check every package a lockfile (or a project directory) installs on at least one
 target's Python may be missing wheels for it, so its PyPI packages are also looked up on the index (keeping the
 lock's files if a lookup fails).
 
-- `deps=True` resolves the dependency tree for requirements files and `pyproject.toml` inputs from
+- `deps=True` resolves the dependency tree for requirements files, `pyproject.toml` and script (`# /// script`) inputs from
   PyPI metadata for each target, as `--deps` does on the command line. Each package in the tree gets its own
   `Result`, and on its gap targets `via` gives the path from your input and `direct` the direct dependencies behind
   it. A `pyproject.toml` (or a project directory with only one) is accepted and read from `[project] dependencies`
-  (no extras). It's refused where `--deps` refuses: lockfiles, `offline=True`, a project or environment that names
+  (no extras), and a script from its `# /// script` block. It's refused where `--deps` refuses: lockfiles, `offline=True`, a project or environment that names
   another index, and requirement files pip would follow differently (a `SourceError` saying so). A requirements
   file that already pins everything with hashes is checked as written. Requirements that aren't index packages
   (`-e .`, a path, a URL) can't be resolved, so with `deps=True` any such requirement raises `SourceError`, even
@@ -106,7 +106,7 @@ lock's files if a lookup fails).
 - `environment=` picks a `pixi.lock` environment (default: `default`); for a project directory it makes
   `pixi.lock` the lockfile read. Naming one for any other lockfile raises `SourceError`.
 
-Without `deps=True`, `check_lockfile()` doesn't read `pyproject.toml` as an input.
+Without `deps=True`, `check_lockfile()` doesn't read `pyproject.toml` or a script as an input.
 
 ### Pyodide
 

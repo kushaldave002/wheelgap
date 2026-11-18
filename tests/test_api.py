@@ -455,6 +455,37 @@ def test_check_lockfile_refuses_pyproject(fake_pypi, tmp_path):
     assert not fake_pypi
 
 
+def test_check_lockfile_refuses_a_script_without_deps(fake_pypi, tmp_path):
+    path = tmp_path / "example.py"
+    path.write_text('# /// script\n# dependencies = ["purewheel"]\n# ///\n', encoding="utf-8")
+    with pytest.raises(SourceError, match="a script's # /// script block lists direct dependencies only"):
+        wheelgap.check_lockfile(path)
+    assert not fake_pypi
+
+
+@pytest.mark.usefixtures("index")
+def test_check_lockfile_deps_script(tmp_path):
+    script = tmp_path / "example.py"
+    script.write_text('# /// script\n# dependencies = ["app==1.0"]\n# ///\n', encoding="utf-8")
+    rows = {r.name: r for r in wheelgap.check_lockfile(script, [WIN, LIN], deps=True)}
+    assert sorted(rows) == ["app", "crypt", "lib", "winonly"]
+    assert rows["crypt"].via == {WIN: ("app", "lib", "crypt")}
+
+
+def test_check_lockfile_deps_refuses_a_script_naming_an_index(index, tmp_path):  # noqa: F811  (the index fixture)
+    script = tmp_path / "example.py"
+    script.write_text(
+        '# /// script\n# dependencies = ["app==1.0"]\n# [[tool.uv.index]]\n# url = "https://example.invalid/simple"\n'
+        "# ///\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(SourceError) as e:
+        wheelgap.check_lockfile(script, deps=True)
+    assert "the script configures an installer index or source; --deps uses only PyPI" in str(e.value)
+    assert "lockfile" not in str(e.value)
+    assert index == []
+
+
 # abi3lib's only wheel is abi3 for Linux: fine on 3.13 there, not on free-threaded 3.14t, and none for Windows.
 # app depends on it directly on Linux and through mid everywhere, so the path differs per target.
 LOCK_ABI3 = (

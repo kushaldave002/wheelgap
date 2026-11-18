@@ -390,7 +390,9 @@ A requirements file, a `pyproject.toml`, a pip report or package names get the
 `--extra-index-url https://wheelgap.github.io/wheels/simple/` line for a requirements file or `pip install`, each wheel's
 `--hash` for requirements that pin hashes, and a reminder that pip treats every index alike. Other lockfiles
 (`pylock.toml`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`, `pixi.lock`) pin each file, so they get a line saying to add
-the index where the lockfile is made and lock again. Packages wheelgap can't place on PyPI aren't checked, and a note
+the index where the lockfile is made and lock again. A script gets the `[[tool.uv.index]]` and `[tool.uv.sources]`
+lines to add inside its `# /// script` block for `uv run`, commented as the block's lines are, with a note for each
+package that isn't one of the block's own `dependencies` (uv applies sources only to those). Packages wheelgap can't place on PyPI aren't checked, and a note
 on stderr names them. `--markdown` renders the same section with fenced code blocks, and `-q` keeps it. With nothing to fill, a
 note on stderr says so instead (not with `-q`).
 

@@ -18,6 +18,7 @@ from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from urllib.parse import quote
 
+from packaging.requirements import InvalidRequirement, Requirement
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.tags import Tag
 from packaging.utils import InvalidWheelFilename, canonicalize_name, parse_wheel_filename
@@ -31,6 +32,7 @@ from .targets import Target
 SCHEMA = 1
 # Inputs pip installs from as they are: a requirements file, a pyproject.toml, a pip report or package names. Lockfiles
 # pin each file's URL, so adding an index to pip changes nothing for them; they get the lockfile advice (_lock_kinds).
+# A script (PEP 723) gets the uv config for its own # /// script block instead (_script_parts).
 PIP_KINDS = frozenset({"requirements", "pyproject", "pip-report", None})
 INDEX = "https://wheelgap.github.io/wheels/simple/"
 DOWNLOAD = "https://github.com/wheelgap/wheels/releases/download/gap-wheels"
@@ -284,10 +286,51 @@ def _parts(
 
 
 def _lock_kinds(fills: list[Fill]) -> list[str]:
-    """The input kinds (other than uv.lock and pip's) of the fills, as their file labels, in order."""
+    """The input kinds (other than uv.lock, scripts and pip's) of the fills, as their file labels, in order."""
     return list(
-        dict.fromkeys(f.source.label for f in fills if f.source.kind != "uv" and f.source.kind not in PIP_KINDS)
+        dict.fromkeys(
+            f.source.label for f in fills if f.source.kind not in ("uv", "script") and f.source.kind not in PIP_KINDS
+        )
     )
+
+
+def _script_direct_keys(source: Source) -> set[str]:
+    """The canonical names a script's # /// script block lists in its dependencies."""
+    keys: set[str] = set()
+    for line in source.specs:
+        try:
+            keys.add(canonicalize_name(Requirement(line).name))
+        except InvalidRequirement:
+            continue
+    return keys
+
+
+def _script_parts(fills: list[Fill], code: Callable[[str], str] = _plain) -> list[tuple[str, list[str], list[str]]]:
+    """Per script (PEP 723) input: (its label, the lines to add to its # /// script block, the notes). `uv run`
+    reads [tool.uv] in the block; uv applies [tool.uv.sources] only to the block's own dependencies."""
+    by_script: dict[int, list[Fill]] = {}  # by input: two scripts may share a file name
+    for f in fills:
+        if f.source.kind == "script":
+            by_script.setdefault(id(f.source), []).append(f)
+    out: list[tuple[str, list[str], list[str]]] = []
+    for fs in by_script.values():
+        label, direct = fs[0].source.label, _script_direct_keys(fs[0].source)
+        config = ["[[tool.uv.index]]", 'name = "wheelgap"', f'url = "{INDEX}"', "explicit = true", ""]
+        config.append("[tool.uv.sources]")
+        notes: list[str] = []
+        for f in {f.row.package.key: f for f in fs}.values():
+            name = f.row.package.name
+            config.append(f'{_toml_key(name)} = {{ index = "wheelgap" }}')
+            if f.row.package.key not in direct:
+                notes.append(
+                    f"uv only applies {code('[tool.uv.sources]')} to a script's own dependencies, so also list "
+                    f"{code(json.dumps(name))} in its {code('dependencies')}"
+                )
+        out.append((label, ["# " + line if line else "#" for line in config], notes))
+    return out
+
+
+SCRIPT_MERGE = "If the block already has a [tool.uv.sources] table, add these lines to it instead of a second one."
 
 
 def _hashes(fills: list[Fill]) -> list[tuple[str, str]]:
@@ -367,6 +410,10 @@ def text_lines(fills: list[Fill], multi_py: bool) -> list[str]:
             *(f"  {req} --hash=sha256:{sha}" for req, sha in _hashes(fills)),
             PIP_CAVEAT,
         ]
+    for label, lines, script_notes in _script_parts(fills):
+        out += ["", f"To install them with uv run, add this inside {label}'s # /// script block:", "", *lines, ""]
+        out += [f"{note}." for note in script_notes]
+        out.append(SCRIPT_MERGE)
     if locks := _lock_kinds(fills):
         out += [
             "",
@@ -413,6 +460,13 @@ def markdown_lines(fills: list[Fill], multi_py: bool) -> list[str]:
             PIP_CAVEAT,
             "",
         ]
+    for label, lines, script_notes in _script_parts(fills, _code):
+        out += [f"To install them with `uv run`, add this inside `{label}`'s `# /// script` block:", ""]
+        out += ["```python", *lines, "```", ""]
+        out += [f"- {note}." for note in script_notes]
+        if script_notes:
+            out.append("")
+        out += [SCRIPT_MERGE.replace("[tool.uv.sources]", "`[tool.uv.sources]`"), ""]
     if locks := _lock_kinds(fills):
         out += [
             f"{', '.join(f'`{k}`' for k in locks)} pins each file, so add `{INDEX}` as an index (for these packages "
