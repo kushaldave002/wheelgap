@@ -58,7 +58,7 @@ jobs:
 ```
 
 - `args` must then start with the lockfile's path, followed only by what `wheelgap diff` takes: `-p`, `-t`,
-  `--glibc`, `--musl`, `--macos` and `--distro`; anything else exits 2. The step exits 1 when something
+  `--glibc`, `--musl`, `--macos`, `--distro`, `--ios` and `--android-api`; anything else exits 2. The step exits 1 when something
   got worse and 0 when nothing did, but only when `wheelgap diff`'s exit code and its report agree; anything else, such
   as bad input or a run that printed no report, exits 2.
 - The lockfile must exist on both sides: one the pull request adds exits 2. A requirements file that includes others
