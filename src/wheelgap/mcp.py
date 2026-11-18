@@ -21,7 +21,8 @@ Tools (all read-only; they look packages up on PyPI, or the index in WHEELGAP_IN
 - check_dist: what `wheelgap --dist DIR --json` reports for the release about to be uploaded, plus the targets
   the previous release on PyPI had a wheel for that this one drops.
 - diff_lockfiles: what `wheelgap diff OLD NEW --json` reports (the packages that got worse, and new ones with gaps).
-- suggest_targets: targets and Python versions named in a project's workflows, GitLab CI and Dockerfiles, without lookups.
+- suggest_targets: targets and Python versions named in a project's workflows, GitLab CI and Dockerfiles,
+  without lookups.
 - list_targets: the platform names the other tools accept.
 
 Paths may be file:// URIs. If the client has the roots capability, the server asks it for roots/list after
@@ -398,9 +399,9 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "suggest_targets",
         "title": "Suggest a project's targets",
-        "description": "Read a project's GitHub Actions workflows, .gitlab-ci.yml and Dockerfiles to suggest targets and "
-        "Python "
-        "versions, with the file and line for each, unreadable inputs and suggested config. Reads local files only; "
+        "description": "Read a project's GitHub Actions workflows, .gitlab-ci.yml and Dockerfiles to suggest "
+        "targets and Python versions, with the file and line for each, unreadable inputs and suggested config. "
+        "Reads local files only; "
         "nothing is changed or checked. Confirm the suggestions with the user before checking their project.",
         "inputSchema": {
             "type": "object",

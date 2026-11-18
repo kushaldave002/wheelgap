@@ -436,7 +436,6 @@ def test_symlinks_out_of_the_project_are_not_read(tmp_path, linked):
     assert where(found.targets) == expected
 
 
-
 def test_gitlab_ci_symlinked_out_of_the_project_is_not_read(tmp_path):
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
@@ -450,6 +449,7 @@ def test_gitlab_ci_symlinked_out_of_the_project_is_not_read(tmp_path):
     found = suggest(project)
     assert unreadable(found) == [(".gitlab-ci.yml", None, "a symlink out of the project: not read")]
     assert found.targets == []
+
 
 def test_glibc_is_left_out_when_the_sources_disagree(tmp_path, capsys):
     workflow(tmp_path, "jobs:\n  test:\n    runs-on: ubuntu-latest\n")
