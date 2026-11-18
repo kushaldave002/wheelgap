@@ -58,7 +58,7 @@ jobs:
 ```
 
 - `args` must then start with the lockfile's path, followed only by what `wheelgap diff` takes: `-p`, `-t`,
-  `--glibc`, `--musl`, `--macos` and `--distro`; anything else exits 2. The step exits 1 when something
+  `--glibc`, `--musl`, `--macos`, `--distro`, `--ios` and `--android-api`; anything else exits 2. The step exits 1 when something
   got worse and 0 when nothing did, but only when `wheelgap diff`'s exit code and its report agree; anything else, such
   as bad input or a run that printed no report, exits 2.
 - The lockfile must exist on both sides: one the pull request adds exits 2. A requirements file that includes others
@@ -163,9 +163,10 @@ repos:
 ```
 
 The hook runs when `uv.lock`, `poetry.lock`, `pdm.lock`, `pylock.toml`, `Pipfile.lock`, `pixi.lock`, a
-`requirements*.txt` or `requirements*.lock` file, or a conda `environment*.yml` or `environment*.yaml` file changes.
-Put your targets in `[tool.wheelgap]` in `pyproject.toml` so the hook checks the right platforms. Pass extra options
-with `args:`, for example `args: [--fail-on, missing]`.
+`requirements*.txt` or `requirements*.lock` file changes, and when `pyproject.toml` (its `[tool.wheelgap]` and
+`[tool.uv]` settings change the answer), `uv.toml` or `.python-version` does. Put your targets in `[tool.wheelgap]` in
+`pyproject.toml` so the hook checks the right platforms. Pass extra options with `args:`, for example
+`args: [--fail-on, missing]`.
 
 ## Code scanning {#code-scanning}
 
