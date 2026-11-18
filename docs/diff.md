@@ -31,7 +31,7 @@ it couldn't read is `unknown`, as in a lockfile.
 | --- | --- |
 | `OLD` | the lockfile before the change: a file, a directory, or git's `REF:PATH`; with `--deps`, a pinned `name==1.2` |
 | `NEW` | the lockfile after the change, in the same forms |
-| `-p`, `--python VER` | target Python, repeatable (default: the running Python); `next` and `next-t` work too |
+| `-p`, `--python VER` | target Python, repeatable (default: `python` in `[tool.wheelgap]`, else `.python-version`, else the running Python); `next` and `next-t` work too |
 | `-t`, `--target PLATFORM` | target platform, repeatable |
 | `--glibc X.Y` | glibc version for `linux-*` targets (default: 2.36), e.g. `--glibc 2.28` for RHEL 8 |
 | `--musl X.Y` | musl version for `musl-*` targets (default: 1.2) |
@@ -42,9 +42,10 @@ it couldn't read is `unknown`, as in a lockfile.
 
 The same `-p` and `-t` apply to both lockfiles. `wheelgap diff` reads `[tool.wheelgap]` (`python`, `targets`, `glibc`,
 `musl`, `distro`, `macos`, `ios`, `android-api`), `[tool.uv] required-environments` and `.python-version` from the
-`NEW` input's project directory (using the working tree for a `REF:PATH` input), with command-line flags winning over
-them just as in the main command. Keys `diff` doesn't use yet (`ignore`, `advisory`, `groups`, ...) are accepted and
-ignored. `--advisory` doesn't work with `wheelgap diff` yet.
+`NEW` input's project directory only, never `OLD`'s, with command-line flags winning over them just as in the main
+command. For a `REF:PATH` input that's the folder of `PATH` in the current directory's working tree, not the copy at
+`REF`, so uncommitted settings apply; with `--deps`, it's the current directory. Keys `diff` doesn't use yet (`ignore`,
+`advisory`, `groups`, ...) are accepted and ignored. `--advisory` doesn't work with `wheelgap diff` yet.
 
 ## What counts as worse
 

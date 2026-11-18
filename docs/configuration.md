@@ -17,9 +17,11 @@ wheelgap reads the `pyproject.toml` in the folder of the first file or directory
 or in the current directory when you pass none. An unknown key, or a value of the wrong type, is an input error
 (exit 2).
 
-The table is read by the command line (`wheelgap`), the MCP server's `check_lockfile` and `check_dockerfile` tools,
-and the pre-commit hook. The [Python API](python-api.md) and [`wheelgap diff`](diff.md) don't read it: pass the same
-settings as arguments there.
+The table is read by the command line (`wheelgap`), [`wheelgap diff`](diff.md), the MCP server's `check_lockfile` and
+`check_dockerfile` tools, and the pre-commit hook. `wheelgap diff` reads only the `NEW` input's project, from the
+working tree for a `REF:PATH` input, and only the target keys; see [its options](diff.md#options). The
+[Python API](python-api.md) and the MCP server's `diff_lockfiles` tool don't read it: pass the same settings as
+arguments there.
 
 Keys that take a list also accept a single string (`targets = "linux-aarch64"`).
 

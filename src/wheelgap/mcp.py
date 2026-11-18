@@ -369,7 +369,7 @@ TOOLS: list[dict[str, Any]] = [
             " private index) counts as worse; 'unchecked' names packages unknown on both sides at the same version. "
             "Pass the old lockfile as 'old' under its own file name, since the name says how to read it: e.g. `mkdir -p"
             " /tmp/old && git show HEAD:uv.lock > /tmp/old/uv.lock` (this works after the upgrade too, until it's "
-            "committed). As with `wheelgap diff`, the project's [tool.wheelgap] settings don't apply: pass python and "
+            "committed). Unlike `wheelgap diff`, the project's [tool.wheelgap] settings don't apply: pass python and "
             "targets. " + _STATUS_HELP
         ),
         "inputSchema": {

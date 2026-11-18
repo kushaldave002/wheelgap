@@ -43,17 +43,9 @@ from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import InvalidName, canonicalize_name
 
 from . import __version__, origin, suggest
-from .api import Result, _check_lockfile, check_packages, make_targets
+from .api import Result, _check_lockfile, check_packages, make_targets, running_python
 from .check import CELL, Row, Status, applies, reachable
-from .cli import (
-    find_pyproject,
-    libc_versions,
-    load_config,
-    load_uv_targets,
-    project_dir,
-    read_python_version,
-    running_python,
-)
+from .cli import find_pyproject, libc_versions, load_config, load_uv_targets, project_dir, read_python_version
 from .logsafe import guarded_output
 from .sources import Source, SourceError
 from .targets import (
@@ -438,7 +430,7 @@ def _main(argv: list[str] | None, prog: str) -> int:
         default=[],
         metavar="VER",
         help="target Python, e.g. 3.13, 3.14t, or next / next-t for the newest CPython wheelgap knows "
-        "(repeatable; default: the running Python)",
+        "(repeatable; default: [tool.wheelgap] python, else .python-version, else the running Python)",
     )
     p.add_argument(
         "-t", "--target", action="append", default=[], metavar="PLATFORM", help="target platform (repeatable)"

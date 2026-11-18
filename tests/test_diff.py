@@ -4,6 +4,7 @@ import subprocess
 import sys
 
 import pytest
+from conftest import FAKE_INDEX
 
 from wheelgap.api import Result, make_targets
 from wheelgap.check import Status
@@ -756,30 +757,114 @@ def test_diff_reads_uv_required_environments_as_default_targets(fake_pypi, tmp_p
     assert "[tool.uv] required-environments" in err
 
 
-def test_diff_malformed_tool_wheelgap_exits_2(fake_pypi, tmp_path, capsys):
+@pytest.mark.parametrize(
+    "config, flags, expected",
+    [
+        ('python = ["3.13"]\ntargets = ["linux-aarch64"]', [], [("3.13", "linux-aarch64")]),
+        ('python = ["3.13"]\ntargets = ["linux-aarch64"]', ["-t", "win-amd64"], [("3.13", "win-amd64")]),
+        ('python = ["3.13"]\ntargets = ["linux-aarch64"]', ["-p", "3.14"], [("3.14", "linux-aarch64")]),
+    ],
+)
+def test_diff_uses_new_project_defaults(fake_pypi, tmp_path, capsys, config, flags, expected):
     old, new = write_pair(tmp_path, "purewheel==3.1\n", "purewheel==3.1\n")
-    (tmp_path / "new" / "pyproject.toml").write_text('[tool.wheelgap]\ntargets = "not-a-list"\n', encoding="utf-8")
-    assert main([old, new]) == 2
-    assert "wheelgap: error:" in capsys.readouterr().err
+    (tmp_path / "new" / "pyproject.toml").write_text("[tool.wheelgap]\n" + config, encoding="utf-8")
+    # OLD's project settings are never read: only NEW's.
+    (tmp_path / "old" / "pyproject.toml").write_text('[tool.wheelgap]\npython = ["3.12"]', encoding="utf-8")
+    assert main([old, new, *flags, "--json"]) == 0
+    targets = json.loads(capsys.readouterr().out)["targets"]
+    assert [(t["python"], t["platform"]) for t in targets] == expected
 
 
-def test_diff_git_ref_uses_working_tree_config(fake_pypi, tmp_path, capsys, monkeypatch):
-    if shutil.which("git") is None:
-        pytest.skip("git not installed")
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
-    (tmp_path / "requirements.txt").write_text("ranged==1.5\n", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text('[tool.wheelgap]\ntargets = ["win-amd64"]\n', encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "v1"], cwd=tmp_path, check=True)
-    (tmp_path / "requirements.txt").write_text("ranged==1.9\n", encoding="utf-8")
-    subprocess.run(["git", "commit", "-q", "-am", "v2"], cwd=tmp_path, check=True)
-    # Working-tree pyproject.toml switches targets to linux-x86_64 (uncommitted); REF:PATH must read working tree.
-    (tmp_path / "pyproject.toml").write_text(
-        '[tool.wheelgap]\npython = ["3.13"]\ntargets = ["linux-x86_64"]\n', encoding="utf-8"
+def test_diff_config_python_wins_over_python_version_file(fake_pypi, tmp_path, capsys):
+    old, new = write_pair(tmp_path, "purewheel==3.1\n", "purewheel==3.1\n")
+    (tmp_path / "new" / ".python-version").write_text("3.12\n", encoding="utf-8")
+    (tmp_path / "new" / "pyproject.toml").write_text('[tool.wheelgap]\npython = ["3.13"]\n', encoding="utf-8")
+    assert main([old, new, "-t", "win-amd64", "--json"]) == 0
+    assert [t["python"] for t in json.loads(capsys.readouterr().out)["targets"]] == ["3.13"]
+
+
+def test_diff_rejects_malformed_project_config(fake_pypi, tmp_path, capsys):
+    old, new = write_pair(tmp_path, "purewheel==3.1\n", "purewheel==3.1\n")
+    (tmp_path / "new" / "pyproject.toml").write_text("[tool.wheelgap]\ntargets = 12", encoding="utf-8")
+    assert main([old, new, *TARGET, "--json"]) == 2
+    out, err = capsys.readouterr()
+    assert "targets must be a list of strings" in err
+    assert json.loads(out)["error"]["type"] == "SourceError"
+
+
+@pytest.mark.parametrize(
+    "config, flags, pair, expected_code",
+    [
+        ('glibc = "2.28"', [], NEW_GLIBC_PAIR, 1),
+        ('glibc = "2.28"', ["--glibc", "2.36"], NEW_GLIBC_PAIR, 0),
+        ('glibc = "2.36"', ["--distro", "rhel-8"], NEW_GLIBC_PAIR, 1),
+        ('distro = "rhel-8"', ["--glibc", "2.36"], NEW_GLIBC_PAIR, 0),
+        ('musl = "1.1"', ["-t", "musl-x86_64"], ("musllag==1.0\n", "musllag==1.1\n"), 1),
+        ('macos = "13.0"', ["-t", "macos-arm64"], ("maclag==1.0\n", "maclag==1.1\n"), 1),
+        ('macos = "13.0"', ["-t", "macos-arm64", "--macos", "14.0"], ("maclag==1.0\n", "maclag==1.1\n"), 0),
+    ],
+)
+def test_diff_project_platform_floors(fake_pypi, tmp_path, capsys, config, flags, pair, expected_code):
+    old, new = write_pair(tmp_path, *pair)
+    (tmp_path / "new" / "pyproject.toml").write_text("[tool.wheelgap]\n" + config, encoding="utf-8")
+    assert main([old, new, *TARGET, *flags]) == expected_code
+
+
+# Each new release's only mobile wheel needs iOS 13.0 / Android API level 24 (the defaults); the old one's needs less.
+MOBILE_LAG = {
+    "ioslag": {
+        "1.0": ["ioslag-1.0-cp313-cp313-ios_12_0_arm64_iphoneos.whl"],
+        "1.1": ["ioslag-1.1-cp313-cp313-ios_13_0_arm64_iphoneos.whl"],
+    },
+    "androidlag": {
+        "1.0": ["androidlag-1.0-cp313-cp313-android_21_arm64_v8a.whl"],
+        "1.1": ["androidlag-1.1-cp313-cp313-android_24_arm64_v8a.whl"],
+    },
+}
+
+
+@pytest.mark.parametrize(
+    "config, name, platform, expected_code",
+    [
+        ("", "ioslag", "ios-arm64", 0),
+        ('ios = "12.0"', "ioslag", "ios-arm64", 1),
+        ("", "androidlag", "android-arm64", 0),
+        ("android-api = 21", "androidlag", "android-arm64", 1),
+    ],
+)
+def test_diff_project_mobile_floors(fake_pypi, tmp_path, capsys, monkeypatch, config, name, platform, expected_code):
+    for package, releases in MOBILE_LAG.items():
+        monkeypatch.setitem(FAKE_INDEX, package, releases)
+    old, new = write_pair(tmp_path, f"{name}==1.0\n", f"{name}==1.1\n")
+    (tmp_path / "new" / "pyproject.toml").write_text("[tool.wheelgap]\n" + config, encoding="utf-8")
+    assert main([old, new, "-p", "3.13", "-t", platform]) == expected_code
+
+
+@needs_git
+def test_diff_git_ref_uses_working_tree_config(fake_pypi, repo, capsys):
+    config = repo / "pyproject.toml"
+    config.write_text('[tool.wheelgap]\npython = ["3.12"]\ntargets = ["linux-x86_64"]', encoding="utf-8")
+    git("add", "pyproject.toml", cwd=repo)
+    git("commit", "-q", "-m", "old config", cwd=repo)
+    config.write_text('[tool.wheelgap]\npython = ["3.13"]\ntargets = ["win-arm64"]', encoding="utf-8")
+    assert main(["HEAD:uv.lock", "HEAD:uv.lock", "--json"]) == 0
+    assert [(t["python"], t["platform"]) for t in json.loads(capsys.readouterr().out)["targets"]] == [
+        ("3.13", "win-arm64")
+    ]
+
+
+@needs_git
+def test_diff_git_ref_config_when_lockfile_is_absent_from_working_tree(fake_pypi, repo, capsys):
+    folder = repo / "project"
+    folder.mkdir()
+    (folder / "uv.lock").write_text(UV_OLD, encoding="utf-8")
+    git("add", "project/uv.lock", cwd=repo)
+    git("commit", "-q", "-m", "nested lock", cwd=repo)
+    (folder / "uv.lock").unlink()
+    (folder / "pyproject.toml").write_text(
+        '[tool.wheelgap]\npython = ["3.13"]\ntargets = ["win-arm64"]\nignore = ["purewheel"]', encoding="utf-8"
     )
-    monkeypatch.chdir(tmp_path)
-    assert main(["HEAD~1:requirements.txt", "HEAD:requirements.txt", "--json"]) == 1
-    report = json.loads(capsys.readouterr().out)
-    assert [t["platform"] for t in report["targets"]] == ["linux-x86_64"]
+    assert main(["HEAD:project/uv.lock", "HEAD:project/uv.lock", "--json"]) == 0
+    assert [(t["python"], t["platform"]) for t in json.loads(capsys.readouterr().out)["targets"]] == [
+        ("3.13", "win-arm64")
+    ]
