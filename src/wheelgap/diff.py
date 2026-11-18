@@ -47,7 +47,16 @@ from .api import Result, _check_lockfile, check_packages, make_targets
 from .check import CELL, Row, Status, applies, reachable
 from .logsafe import guarded_output
 from .sources import Source, SourceError
-from .targets import DEFAULT_GLIBC, DEFAULT_MACOS, DEFAULT_MUSL, Target, next_python_note, resolve_distro
+from .targets import (
+    DEFAULT_ANDROID_API,
+    DEFAULT_GLIBC,
+    DEFAULT_IOS,
+    DEFAULT_MACOS,
+    DEFAULT_MUSL,
+    Target,
+    next_python_note,
+    resolve_distro,
+)
 
 # Higher is worse. UNKNOWN only orders entries of the same package on one target (see the module docstring).
 RANK = {
@@ -420,6 +429,12 @@ def _main(argv: list[str] | None, prog: str) -> int:
         help="default glibc/musl version from a distro, e.g. ubuntu-22.04 (does not select -t)",
     )
     p.add_argument("--macos", metavar="X.Y", help=f"minimum macOS for macos-* targets (default: {DEFAULT_MACOS})")
+    p.add_argument("--ios", metavar="X.Y", help=f"minimum iOS for ios-* targets (default: {DEFAULT_IOS})")
+    p.add_argument(
+        "--android-api",
+        metavar="N",
+        help=f"minimum Android API level for android-* targets (default: {DEFAULT_ANDROID_API})",
+    )
     p.add_argument("--json", action="store_true", help="print one JSON object instead of the text report")
     p.add_argument(
         "--deps",
@@ -441,7 +456,13 @@ def _main(argv: list[str] | None, prog: str) -> int:
         if args.musl is not None:
             musl = args.musl
         targets = make_targets(
-            args.python or None, args.target or None, glibc=glibc, musl=musl, macos=args.macos or DEFAULT_MACOS
+            args.python or None,
+            args.target or None,
+            glibc=glibc,
+            musl=musl,
+            macos=args.macos or DEFAULT_MACOS,
+            ios=args.ios or DEFAULT_IOS,
+            android_api=args.android_api or DEFAULT_ANDROID_API,
         )
         if note := next_python_note(args.python):
             print(f"wheelgap: note: {note}", file=sys.stderr)
