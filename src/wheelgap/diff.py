@@ -443,6 +443,12 @@ def _main(argv: list[str] | None, prog: str) -> int:
         help="default glibc/musl version from a distro, e.g. ubuntu-22.04 (does not select -t)",
     )
     p.add_argument("--macos", metavar="X.Y", help=f"minimum macOS for macos-* targets (default: {DEFAULT_MACOS})")
+    p.add_argument("--ios", metavar="X.Y", help=f"minimum iOS for ios-* targets (default: {DEFAULT_IOS})")
+    p.add_argument(
+        "--android-api",
+        metavar="N",
+        help=f"minimum Android API level for android-* targets (default: {DEFAULT_ANDROID_API})",
+    )
     p.add_argument("--json", action="store_true", help="print one JSON object instead of the text report")
     p.add_argument(
         "--deps",
@@ -472,8 +478,8 @@ def _main(argv: list[str] | None, prog: str) -> int:
             glibc=glibc,
             musl=musl,
             macos=args.macos or config.get("macos", DEFAULT_MACOS),
-            ios=config.get("ios", DEFAULT_IOS),
-            android_api=config.get("android-api", DEFAULT_ANDROID_API),
+            ios=args.ios or config.get("ios", DEFAULT_IOS),
+            android_api=args.android_api or config.get("android-api", DEFAULT_ANDROID_API),
         )
         if next_note := next_python_note(pythons or []):
             print(f"wheelgap: note: {next_note}", file=sys.stderr)

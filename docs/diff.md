@@ -37,6 +37,8 @@ it couldn't read is `unknown`, as in a lockfile.
 | `--musl X.Y` | musl version for `musl-*` targets (default: 1.2) |
 | `--distro NAME` | default glibc/musl version from a distro, e.g. `--distro ubuntu-22.04`; doesn't select `-t`, and an explicit `--glibc` or `--musl` wins over it |
 | `--macos X.Y` | minimum macOS for `macos-*` targets (default: 14.0) |
+| `--ios X.Y` | minimum iOS for `ios-*` targets (default: 13.0) |
+| `--android-api N` | minimum Android API level for `android-*` targets (default: 24) |
 | `--json` | print one JSON object instead of the text report |
 | `--deps` | `OLD` and `NEW` are pinned releases: resolve and compare their whole trees ([above](#comparing-two-package-versions)) |
 

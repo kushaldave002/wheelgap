@@ -127,6 +127,52 @@ def test_diff_macos_flag_counts_a_wheel_above_the_floor(fake_pypi, tmp_path, cap
     ]
 
 
+def test_diff_ios_flag_counts_a_wheel_above_the_floor(fake_pypi, tmp_path, capsys, monkeypatch):
+    # The new release's only iOS wheel is ios_15_0, above the default 13.0 floor.
+    monkeypatch.setitem(
+        FAKE_INDEX,
+        "ioslag",
+        {
+            "1.0": ["ioslag-1.0-cp313-cp313-ios_13_0_arm64_iphoneos.whl", "ioslag-1.0.tar.gz"],
+            "1.1": ["ioslag-1.1-cp313-cp313-ios_15_0_arm64_iphoneos.whl", "ioslag-1.1.tar.gz"],
+        },
+    )
+    old, new = write_pair(tmp_path, "ioslag==1.0\n", "ioslag==1.1\n")
+    assert main([old, new, "-p", "3.13", "-t", "ios-arm64"]) == 1
+    assert capsys.readouterr().out.splitlines() == [
+        "ioslag 1.0 → 1.1",
+        "  ios-arm64: ✓ → ✗ missing",
+        "1 package got worse.",
+    ]
+    assert main([old, new, "-p", "3.13", "-t", "ios-arm64", "--ios", "15.0"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["Nothing got worse."]
+    assert main([old, new, "-p", "3.13", "-t", "ios-arm64", "--ios", "not-a-version"]) == 2
+    assert "wheelgap: error:" in capsys.readouterr().err
+
+
+def test_diff_android_api_flag_counts_a_wheel_above_the_floor(fake_pypi, tmp_path, capsys, monkeypatch):
+    # The new release's only Android wheel is android_26, above the default API 24 floor.
+    monkeypatch.setitem(
+        FAKE_INDEX,
+        "androidlag",
+        {
+            "1.0": ["androidlag-1.0-cp313-cp313-android_24_arm64_v8a.whl", "androidlag-1.0.tar.gz"],
+            "1.1": ["androidlag-1.1-cp313-cp313-android_26_arm64_v8a.whl", "androidlag-1.1.tar.gz"],
+        },
+    )
+    old, new = write_pair(tmp_path, "androidlag==1.0\n", "androidlag==1.1\n")
+    assert main([old, new, "-p", "3.13", "-t", "android-arm64"]) == 1
+    assert capsys.readouterr().out.splitlines() == [
+        "androidlag 1.0 → 1.1",
+        "  android-arm64: ✓ → ✗ missing",
+        "1 package got worse.",
+    ]
+    assert main([old, new, "-p", "3.13", "-t", "android-arm64", "--android-api", "26"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["Nothing got worse."]
+    assert main([old, new, "-p", "3.13", "-t", "android-arm64", "--android-api", "abc"]) == 2
+    assert "wheelgap: error:" in capsys.readouterr().err
+
+
 def test_diff_distro_supplies_the_libc_version(fake_pypi, tmp_path, capsys):
     # rhel-8 is glibc 2.28, so it must see what --glibc 2.28 sees; the alias rocky-8 resolves the same way.
     old, new = write_pair(tmp_path, *NEW_GLIBC_PAIR)
@@ -838,6 +884,22 @@ def test_diff_project_mobile_floors(fake_pypi, tmp_path, capsys, monkeypatch, co
     old, new = write_pair(tmp_path, f"{name}==1.0\n", f"{name}==1.1\n")
     (tmp_path / "new" / "pyproject.toml").write_text("[tool.wheelgap]\n" + config, encoding="utf-8")
     assert main([old, new, "-p", "3.13", "-t", platform]) == expected_code
+
+
+@pytest.mark.parametrize(
+    "config, flags, name, platform",
+    [
+        ('ios = "12.0"', ["--ios", "13.0"], "ioslag", "ios-arm64"),
+        ("android-api = 21", ["--android-api", "24"], "androidlag", "android-arm64"),
+    ],
+)
+def test_diff_mobile_flags_win_over_config(fake_pypi, tmp_path, capsys, monkeypatch, config, flags, name, platform):
+    # As in the main command, --ios / --android-api beat [tool.wheelgap]: the newer floor admits both releases.
+    for package, releases in MOBILE_LAG.items():
+        monkeypatch.setitem(FAKE_INDEX, package, releases)
+    old, new = write_pair(tmp_path, f"{name}==1.0\n", f"{name}==1.1\n")
+    (tmp_path / "new" / "pyproject.toml").write_text("[tool.wheelgap]\n" + config, encoding="utf-8")
+    assert main([old, new, "-p", "3.13", "-t", platform, *flags]) == 0
 
 
 @needs_git
