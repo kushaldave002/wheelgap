@@ -2804,7 +2804,11 @@ def test_gitlab_hosted_runner_tags(tmp_path, tag, target):
         ("test:\n  image: !reference [.base, image]\n", "YAML"),
         ("default:\n  image: python:3.13\ntest:\n  inherit:\n    default: false\n", "inherit"),
         ("test:\n  image: {name: 'python:3.13', docker: {platform: 'linux/arm64'}}\n", "docker"),
-        ("test:\n  image: python:3.13\n  tags: [saas-windows-medium-amd64]\n", "Linux"),
+        ("test:\n  image: python:3.13\n  tags: [saas-windows-medium-amd64]\n", "Windows runners"),
+        ("default:\n  image: python:3.13\ntest:\n  tags: [saas-windows-medium-amd64]\n", "Windows runners"),
+        ("test:\n  image: python:3.13\n  tags: [saas-macos-medium-m1]\n", "runs a macOS VM"),
+        ("default:\n  image: python:3.13\ntest:\n  tags: [saas-macos-large-m2pro]\n", "runs a macOS VM"),
+        ("test:\n  image: python:3.13-windowsservercore\n", "Windows image"),
     ],
 )
 def test_gitlab_uncertain_jobs_are_not_guessed(tmp_path, text, reason):
@@ -2812,3 +2816,115 @@ def test_gitlab_uncertain_jobs_are_not_guessed(tmp_path, text, reason):
     found = suggest(tmp_path)
     assert not found.targets and not found.pythons
     assert found.unreadable and reason in found.unreadable[0].reason
+
+
+UNTAGGED = "untagged: read as GitLab.com's default saas-linux-small-amd64 runner"
+UNTAGGED_SLIM = f"image: python:3.12-slim ({UNTAGGED}, glibc 2.41)"
+
+
+def test_gitlab_sources_name_the_runner(tmp_path):
+    text = "test:\n  image: python:3.13-alpine\n  tags: [saas-linux-small-arm64]\nlint:\n  image: python:3.12-slim\n"
+    (tmp_path / ".gitlab-ci.yml").write_text(text, encoding="utf-8")
+    found = suggest(tmp_path)
+    assert [(f.value, f.source) for f in found.targets] == [
+        (
+            "musl-aarch64",
+            "image: python:3.13-alpine (read as linux/arm64, the saas-linux-small-arm64 runner's CPU, musl 1.2)",
+        ),
+        ("linux-x86_64", UNTAGGED_SLIM),
+    ]
+    assert [(f.value, f.source) for f in found.pythons] == [
+        ("3.13", "image: python:3.13-alpine"),
+        ("3.12", "image: python:3.12-slim"),
+    ]
+
+
+def test_gitlab_macos_image_names_the_macos_version(tmp_path):
+    text = "default:\n  image: macos-26-xcode-26\ntest:\n  tags: [saas-macos-large-m2pro]\n"
+    (tmp_path / ".gitlab-ci.yml").write_text(text, encoding="utf-8")
+    found = suggest(tmp_path)
+    assert [(f.value, f.line, f.source, f.macos) for f in found.targets] == [
+        ("macos-arm64", 2, "image: macos-26-xcode-26 (tags: saas-macos-large-m2pro)", "26.0"),
+    ]
+    assert not found.pythons and not found.unreadable
+
+
+def test_gitlab_file_that_isnt_read(tmp_path):
+    (tmp_path / ".gitlab-ci.yml").write_bytes(b"test:\n  image: python:3.13\xff\n")
+    assert unreadable(suggest(tmp_path)) == [(".gitlab-ci.yml", None, "not UTF-8")]
+    (tmp_path / ".gitlab-ci.yml").write_text(
+        "test:\n  image: !reference [.python-base-job-template-for-every-test, image]\n"
+    )
+    reason = NOT_READ + "image: !reference [.python-base-job-template-for-every-test, image]"[:57] + "..."
+    assert unreadable(suggest(tmp_path)) == [(".gitlab-ci.yml", 2, reason)]
+
+
+GITLAB_CI = """\
+stages:
+  - lint
+  - test
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+workflow:
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+.tests:
+  script:
+    - pip install -e .
+    - pytest
+
+lint:
+  stage: lint
+  image: node:20
+  script:
+    - npx prettier --check .
+
+test:
+  stage: test
+  image: python:3.12-slim
+  script:
+    - pytest
+
+test-arm:
+  extends: .tests
+  image: python:3.13-alpine
+  tags:
+    - saas-linux-small-arm64
+
+test-macos:
+  stage: test
+  image: macos-15-xcode-16
+  tags: [saas-macos-medium-m1]
+  script:
+    - python3 -m pytest
+"""
+
+
+def test_gitlab_pipeline(tmp_path):
+    # An unreadable job (lint's image, test-arm's extends) is refused on its own; the other jobs are still read.
+    (tmp_path / ".gitlab-ci.yml").write_text(GITLAB_CI, encoding="utf-8")
+    found = suggest(tmp_path)
+    assert [(f.value, f.line, f.source, f.glibc, f.macos) for f in found.targets] == [
+        ("linux-x86_64", 26, UNTAGGED_SLIM, "2.41", None),
+        ("macos-arm64", 38, "image: macos-15-xcode-16 (tags: saas-macos-medium-m1)", None, "15.0"),
+    ]
+    assert where(found.pythons) == [("3.12", ".gitlab-ci.yml", 26)]
+    assert unreadable(found) == [
+        (
+            ".gitlab-ci.yml",
+            20,
+            "job lint: image: node:20: only the official python images and Python-tagged Astral uv images are "
+            "supported",
+        ),
+        (".gitlab-ci.yml", 31, "job test-arm: extends isn't read"),
+    ]
+    assert found.config() == {
+        "python": ["3.12"],
+        "targets": ["linux-x86_64", "macos-arm64"],
+        "glibc": "2.41",
+        "macos": "15.0",
+    }

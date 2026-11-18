@@ -483,11 +483,11 @@ the platforms as JSON. Can't be combined with `--markdown`.
 ### `--suggest-targets` {#suggest-targets}
 
 `--suggest-targets [DIR]`: read the platforms and Pythons that `DIR` (default: the current directory)
-already names in its GitHub Actions workflows, GitLab CI and Dockerfiles, print each with the file and line it came from, then a
-`[tool.wheelgap]` snippet to paste into `pyproject.toml`. It only suggests: nothing is changed or checked, and it exits
-0. With `--json`, it prints the same as an object. It can't be combined with `-p`, `-t`, `--dockerfile`, `--build-arg`,
-`--list-targets`, `--markdown` or input files, and a `DIR` that isn't a folder exits 2. What it can't read for sure is
-listed with its file and line rather than guessed. See
+already names in its GitHub Actions workflows, `.gitlab-ci.yml` and Dockerfiles, print each with the file and line it
+came from, then a `[tool.wheelgap]` snippet to paste into `pyproject.toml`. It only suggests: nothing is changed or
+checked, and it exits 0. With `--json`, it prints the same as an object. It can't be combined with `-p`, `-t`,
+`--dockerfile`, `--build-arg`, `--list-targets`, `--markdown` or input files, and a `DIR` that isn't a folder exits 2.
+What it can't read for sure is listed with its file and line rather than guessed. See
 [Suggest targets from your CI and Dockerfiles](targets.md#suggest-targets).
 
 ### `-V`, `--version` {#version}

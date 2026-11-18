@@ -35,7 +35,7 @@ uv run --group dev pytest
 | `cache.py` | The 24-hour on-disk cache of pinned PyPI lookups, `--conda-forge` and `--piwheels` lookups, the tracker's notes, `--build-info` answers and the `--fix` gap wheel list (`--no-cache` and `--online` skip it) |
 | `build.py` | `--explain --build-info`: what a `source` build needs, from the `[build-system]` table of the sdist's `pyproject.toml` (read with `pypi.fetch_sdist_pyproject`) |
 | `dockerfile.py` | `--dockerfile`: reads the final stage's image and platform the way Docker/BuildKit does |
-| `suggest_targets.py` | `--suggest-targets`: targets and Pythons read from GitHub Actions workflows (only files whose every line is in a small, strict subset of YAML) and Dockerfiles |
+| `suggest_targets.py` | `--suggest-targets`: targets and Pythons read from GitHub Actions workflows and `.gitlab-ci.yml` (only files whose every line is in a small, strict subset of YAML), and from Dockerfiles |
 | `offline.py` | `--offline`, `offline = true` and `check_lockfile(..., offline=True)`: refuse inputs that would need an index lookup |
 | `pyodide.py` | `--pyodide-lock`: packages Pyodide ships itself |
 | `condaforge.py` | `--conda-forge`: under `--explain`, whether conda-forge has a build of the same package and version that fits a gap's target (anaconda.org, through `pypi.fetch_json`) |
