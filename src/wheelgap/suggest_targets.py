@@ -1314,9 +1314,22 @@ def _container_kind(name: str) -> str | None:
     return "template" if lower.endswith(_TEMPLATE_SUFFIXES) else "file"
 
 
+_OUTSIDE = "a symlink out of the project: not read"
+
+
+def _outside(path: Path, root: Path) -> bool:
+    """Whether path, its symlinks followed, leads out of the project folder (root, already resolved)."""
+    try:
+        return not path.resolve().is_relative_to(root)
+    except (OSError, RuntimeError):  # a symlink loop: reading it fails, and says so
+        return False
+
+
 def dockerfiles(folder: Path, out: Suggestions) -> list[Path]:
     """Every Dockerfile and Containerfile in the project, outside hidden folders, virtual environments and the
-    folders in _SKIP_DIRS. Templates and folders that can't be opened are noted as unreadable."""
+    folders in _SKIP_DIRS. Templates, symlinks out of the project and folders that can't be opened are noted as
+    unreadable."""
+    root = folder.resolve()
 
     def failed(e: OSError) -> None:
         where = Path(e.filename).relative_to(folder).as_posix() if e.filename else "."
@@ -1336,6 +1349,9 @@ def dockerfiles(folder: Path, out: Suggestions) -> list[Path]:
             if kind == "template":
                 name = (Path(top) / f).relative_to(folder).as_posix()
                 out.unreadable.append(Unreadable(name, None, "a template, filled in before it's built: not read"))
+            elif kind == "file" and _outside(Path(top) / f, root):
+                name = (Path(top) / f).relative_to(folder).as_posix()
+                out.unreadable.append(Unreadable(name, None, _OUTSIDE))
             elif kind == "file":
                 found.append(Path(top) / f)
     return found
@@ -1363,8 +1379,11 @@ def suggest(folder: Path) -> Suggestions:
     if not folder.is_dir():
         raise NotADirectoryError(f"{folder}: not a folder")
     out = Suggestions()
+    root = folder.resolve()
     workflows = folder / ".github" / "workflows"
-    if workflows.is_dir():
+    if workflows.is_dir() and _outside(workflows, root):
+        out.unreadable.append(Unreadable(".github/workflows", None, _OUTSIDE))
+    elif workflows.is_dir():
         try:
             paths = sorted(workflows.iterdir())
         except OSError as e:
@@ -1374,7 +1393,11 @@ def suggest(folder: Path) -> Suggestions:
             )
         for path in paths:
             if path.suffix in (".yml", ".yaml") and path.is_file():
-                read_workflow(path, path.relative_to(folder).as_posix(), out)
+                name = path.relative_to(folder).as_posix()
+                if _outside(path, root):
+                    out.unreadable.append(Unreadable(name, None, _OUTSIDE))
+                else:
+                    read_workflow(path, name, out)
     for path in dockerfiles(folder, out):
         read_docker(path, path.relative_to(folder).as_posix(), out)
     out.unreadable = list(dict.fromkeys(out.unreadable))
