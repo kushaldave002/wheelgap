@@ -1,11 +1,29 @@
+Creating virtualenv wheelgap-log-capture-4VMYsH-j-py3.14 in /home/user/Library/Caches/pypoetry/virtualenvs
+Updating dependencies
+Resolving dependencies...
+
 Package operations: 1 install, 0 updates, 0 removals
 
   - Installing pyaudio (0.2.14)
+/tmp/redacted BuildBackendWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  self._finalize_license_expression()
 
 PEP517 build of a dependency failed
 
 Backend subprocess exited when trying to invoke build_wheel
 
+    | Command '['/tmp/redacted', '/home/user/.local/share/uv/tools/poetry/lib/python3.14/site-packages/pyproject_hooks/_in_process/_in_process.py', 'build_wheel', '/tmp/redacted']' returned non-zero exit status 1.
     | 
     | running bdist_wheel
     | running build
@@ -27,4 +45,3 @@ Note: This error originates from the build backend, and is likely not a problem 
   - the build requirements are missing system dependencies (eg: compilers, libraries, headers).
 
 You can verify this by running pip wheel --no-cache-dir --use-pep517 "pyaudio (==0.2.14)".
-

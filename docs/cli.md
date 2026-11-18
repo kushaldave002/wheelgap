@@ -271,14 +271,26 @@ in links:` (`--find-links`, with or without `--no-index`) and wheelgap isn't giv
 packages failed. Colour codes and GitHub Actions timestamps are skipped, a UTF-16 log (PowerShell's `>`) is read too,
 and of a longer log only the last 8 MiB is read.
 
-Poetry 2.5.1 logs (normal or `-v`) are read from the final build-backend error note, which names the package and
-version; the backend's own indented output does not count. PDM 2.29.7 requires `pdm install -v`: its normal output
-prints the same name and version for index, URL and local-path dependencies, so it cannot safely identify an index
-package. In verbose output, the parser requires the index-origin build link, the failed install's name and version,
-and PDM's named `BuildError` traceback. Download and other install errors are refused, rather than reported as build
-failures. PDM's index must be PyPI, unless wheelgap is given `--index-url`. Other tool versions whose diagnostics differ
-are refused rather than guessed. As with uv, Poetry's error note does not identify the index: pass the index used
-by the install with `--index-url` when it was not PyPI.
+Poetry 2.x logs (captured with 2.5.1; normal or `-v`) are read from Poetry's final build-backend note, `Note: This
+error originates from the build backend, ... issues with NAME (VERSION)`, after its `PEP517 build of a dependency
+failed` header. Only Poetry's own error lines count, not the backend's output, which Poetry indents under `|` but can
+also be at column 0 (what the backend writes to stderr): the note counts only when an earlier Poetry operation line
+names the same package and version, `- Installing NAME (VERSION)` or `- Updating NAME (OLD -> NEW)` (and
+`Downgrading`) for NEW. Poetry's note doesn't name the index, so, as with uv, pass the index the install used with
+`--index-url` when it wasn't PyPI.
+
+PDM logs (captured with 2.29.7) need `pdm install -v`: normal output prints the same name and version for an index,
+URL or local-path dependency, so it's refused with a request to rerun with `-v`. In verbose output the failure counts
+only with all three: PDM's `✖ Install NAME VERSION failed` line, its `Error occurs adding NAME:` with a
+`pdm.exceptions.BuildError` traceback, and the `Running PEP 517 backend to build a wheel for <Link ... (from URL)>`
+line that says which index the sdist came from. A download or other install error is refused rather than reported as a
+build failure, and a package built from another index than PyPI is an error that names the index, unless wheelgap is
+given that index with `--index-url`.
+
+Not read, so they give an error rather than a guess: Poetry 1.x logs, whose `ChefBuildError` diagnostics differ (`found
+no package that failed to build`); a PDM sync that updates a package, whose failure line is `✖ Update NAME OLD -> NEW
+failed`; and a PDM log from a console that can't print Unicode, where PDM writes `x` instead of `✖`. Other Poetry and
+PDM versions whose diagnostics differ are refused too.
 
 A note lists the packages the log says failed, and another says when one has a wheel for a checked target after all:
 then the log likely comes from another platform or Python than `-p` and `-t`. `--no-suggest` turns `--suggest` off.

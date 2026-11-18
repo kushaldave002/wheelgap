@@ -1,3 +1,39 @@
+WARNING: Lockfile does not exist
+Updating the lock file...
+WARNING: Project requires a python version of <3.15,>=3.11, The virtualenv is being created for you as it cannot be matched to the right version.
+INFO: python.use_venv is on, creating a virtualenv for this project...
+Changes are written to pdm.lock.
+  0:00:00 🔒 Lock successful.  
+STATUS: Resolving packages from lockfile...
+Synchronizing working set with resolved packages: 1 to add, 0 to update, 0 to remove
+
+/tmp/redacted BuildBackendWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  self._finalize_license_expression()
+  ✖ Install pyaudio 0.2.14 failed
+/tmp/redacted BuildBackendWarning: License classifiers are deprecated.
+!!
+
+        ********************************************************************************
+        Please consider removing the following classifiers in favor of a SPDX license expression:
+
+        License :: OSI Approved :: MIT License
+
+        See https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license for details.
+        ********************************************************************************
+
+!!
+  self._finalize_license_expression()
   ✖ Install pyaudio 0.2.14 failed
 
 ERRORS:
@@ -9,4 +45,11 @@ running build
 running build_py
 running build_ext
 building 'pyaudio._portaudio' extension
+src/pyaudio/device_api.c:9:10: fatal error: 'portaudio.h' file not found
+    9 | #include "portaudio.h"
+      |          ^~~~~~~~~~~~~
+1 error generated.
+
   0:00:01 ✖ Some package operations failed. 1/1
+[InstallationError]: Some package operations failed.
+WARNING: Add '-v' to see the detailed traceback
