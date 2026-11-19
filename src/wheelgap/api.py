@@ -22,6 +22,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import ClassVar, Literal, overload
 
+from packaging.utils import canonicalize_name
+
 from . import origin, pypi
 from .check import Row, Status, check, explain, explain_lines, status_for, wheel_tags
 from .deps import Resolver, pinned_complete, resolve_deps
@@ -33,11 +35,15 @@ from .sources import (
     Package,
     Source,
     SourceError,
+    UvSelection,
     check_report_targets,
     file_kind,
     find_lockfile,
     load_file,
     pythons_outside_lock,
+    select_pyproject_extras,
+    select_pyproject_groups,
+    select_uv_dependencies,
     skipped_list,
 )
 from .targets import (
@@ -409,6 +415,11 @@ def check_lockfile(
     environment: str | None = None,
     deps: bool = False,
     allow_skipped: bool = False,
+    extras: Iterable[str] | None = None,
+    all_extras: bool = False,
+    groups: Iterable[str] | None = None,
+    only_groups: Iterable[str] = (),
+    no_dev: bool = False,
 ) -> list[Result]:
     """Check every package a lockfile (or a project directory) installs on at least one target.
 
@@ -433,6 +444,12 @@ def check_lockfile(
     lockfile read. Naming one for any other lockfile raises SourceError.
     A pip installation report (`pip install --dry-run --report`) is resolved for one environment, so it raises
     SourceError unless every target matches that environment's platform, machine, Python and implementation.
+    extras, all_extras, groups, only_groups and no_dev select the same install as the CLI's corresponding flags.
+    With no selectors, lockfiles keep the conservative all-extras/all-groups check. An explicit empty extras or
+    groups iterable selects the install with no extras and the installer's default groups. pyproject.toml with
+    deps=True accepts extras and PEP 735 groups, but not no_dev; scripts accept no extras or groups. Unsupported
+    selectors, unknown names and conflicting combinations raise SourceError before lookups. [tool.wheelgap] is
+    not read; installer metadata (such as uv's default-groups) still determines what its default install contains.
     """
     return _check_lockfile(
         path,
@@ -443,6 +460,11 @@ def check_lockfile(
         environment=environment,
         deps=deps,
         allow_skipped=allow_skipped,
+        extras=extras,
+        all_extras=all_extras,
+        groups=groups,
+        only_groups=only_groups,
+        no_dev=no_dev,
     )[0]
 
 
@@ -456,6 +478,11 @@ def _check_lockfile(
     environment: str | None = None,
     deps: bool = False,
     allow_skipped: bool = False,
+    extras: Iterable[str] | None = None,
+    all_extras: bool = False,
+    groups: Iterable[str] | None = None,
+    only_groups: Iterable[str] = (),
+    no_dev: bool = False,
 ) -> tuple[list[Result], Source, list[Row]]:
     """check_lockfile(), also returning the source and check rows for diff's skips and suggestions."""
     targets = _package_targets(targets)
@@ -483,10 +510,38 @@ def _check_lockfile(
             f"wheelgap.diff don't read it; pass a lockfile (the wheelgap command checks {what})"
         )
     source: Source = load_file(lockfile, environment)
-    if source.pyproject_groups_only:
-        raise SourceError(f"{lockfile}: no [project] table, so there are no dependencies to read")
     if environment is not None and source.kind != "pixi":
         raise SourceError(f"{lockfile}: environment applies to pixi.lock only")
+    only_groups = tuple(only_groups)
+    selected = extras is not None or groups is not None or all_extras or no_dev or bool(only_groups)
+    extra_names, group_names = tuple(extras or ()), tuple(groups or ())
+    if source.pyproject_extras is not None:
+        if source.kind == "script" and (groups is not None or only_groups or no_dev or extra_names or all_extras):
+            raise SourceError("extra/group selection doesn't apply to a script: it has no extras or dependency groups")
+        if no_dev:
+            raise SourceError("--no-dev doesn't apply to pyproject.toml: no dependency group is selected by default")
+        if source.pyproject_groups_only:
+            if extra_names or all_extras:
+                raise SourceError(f"{source.label}: no [project] optional-dependencies to select from")
+            if not (group_names or only_groups):
+                raise SourceError(
+                    f"{lockfile}: no [project] table; select a dependency group with groups or only_groups"
+                )
+        if only_groups and (extra_names or all_extras):
+            raise SourceError("--only-group cannot be combined with --extra or --all-extras for pyproject.toml inputs")
+        select_pyproject_groups(source, group_names, only_groups)
+        select_pyproject_extras(source, extra_names, all_extras)
+    elif selected:
+        select_uv_dependencies(
+            [source],
+            UvSelection(
+                extras=frozenset(canonicalize_name(name) for name in extra_names),
+                all_extras=all_extras,
+                groups=frozenset(canonicalize_name(name) for name in group_names),
+                only_groups=frozenset(canonicalize_name(name) for name in only_groups),
+                no_dev=no_dev,
+            ),
+        )
 
     if deps:
         if not (source.specs or source.pyproject_extras is not None):

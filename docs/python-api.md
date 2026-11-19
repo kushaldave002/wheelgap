@@ -79,6 +79,11 @@ check_lockfile(
     environment=None,
     deps=False,
     allow_skipped=False,
+    extras=None,
+    all_extras=False,
+    groups=None,
+    only_groups=(),
+    no_dev=False,
 )
 ```
 
@@ -92,13 +97,28 @@ lock's files if a lookup fails).
   PyPI metadata for each target, as `--deps` does on the command line. Each package in the tree gets its own
   `Result`, and on its gap targets `via` gives the path from your input and `direct` the direct dependencies behind
   it. A `pyproject.toml` (or a project directory with only one) is accepted and read from `[project] dependencies`
-  (no extras), and a script from its `# /// script` block. It's refused where `--deps` refuses: lockfiles, `offline=True`, a project or environment that names
+  plus explicitly selected extras and PEP 735 groups, and a script from its `# /// script` block. It's refused where `--deps` refuses: lockfiles, `offline=True`, a project or environment that names
   another index, and requirement files pip would follow differently (a `SourceError` saying so). A requirements
   file that already pins everything with hashes is checked as written. Requirements that aren't index packages
   (`-e .`, a path, a URL) can't be resolved, so with `deps=True` any such requirement raises `SourceError`, even
   one whose marker no target matches. Pass `allow_skipped=True` to check the rest (what they install isn't checked),
   as 0.13.0 did. A requirements file compiled with hashes already pins what they install, so it's never refused.
   `allow_skipped` does nothing without `deps=True`.
+- `extras=`, `all_extras=True`, `groups=`, `only_groups=` and `no_dev=True` select the same installation as
+  `--extra`, `--all-extras`, `--group`, `--only-group` and `--no-dev`. With no selectors, lockfiles keep the
+  conservative check of every extra and group. Passing `extras=[]` or `groups=[]` explicitly selects no extras
+  and the installer's default groups. uv and Poetry locks support extras and groups; PDM locks support groups.
+  With `deps=True`, a `pyproject.toml` accepts extras and explicitly selected PEP 735 groups; `only_groups`
+  leaves out the project's dependencies unless the group requires the project itself. A groups-only
+  `pyproject.toml` is accepted when a group is selected. Scripts have no extras or groups. As on the CLI,
+  unsupported selectors, unknown names and incompatible combinations raise `SourceError` before lookups.
+  Iterable arguments may be generators. `[tool.wheelgap]` extras/groups are not read.
+
+  ```python
+  production = wheelgap.check_lockfile("uv.lock", targets, no_dev=True)
+  docs = wheelgap.check_lockfile("uv.lock", targets, only_groups=["docs"])
+  tests = wheelgap.check_lockfile("pyproject.toml", targets, deps=True, only_groups=["test"])
+  ```
 - `online=True` re-checks the lockfile's packages on the index, as `--online` does.
 - `offline=True` never contacts an index: it raises `wheelgap.sources.SourceError` if an input has no locked file
   list, and skips the re-check for Python versions outside the lock's `requires-python` (so those versions may show
