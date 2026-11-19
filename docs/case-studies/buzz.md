@@ -48,13 +48,13 @@ The scan exits **1**, as expected when gaps exist. `–` means the locked packag
 
 ## Eleven pins have no wheels on any of the targets
 
-For each of these pins, `--explain` reports no wheels published for the version, and pip independently finds none for all three targets:
+None of these pins has a CPython 3.13 wheel in the lock, and pip independently finds none for all three targets:
 
 | Pin | One dependency path from Buzz |
 | --- | --- |
 | `antlr4-python3-runtime==4.9.3` | `nemo-toolkit-asr → hydra-core` |
 | `docopt==0.6.2` | `nemo-toolkit-asr → pyannote-metrics` |
-| `editdistance==0.8.1` | `nemo-toolkit-asr` |
+| `editdistance==0.8.1` | `nemo-toolkit-asr` (wheels on PyPI stop at cp312) |
 | `intervaltree==3.1.0` | `lhotse` (also reached through NeMo) |
 | `julius==0.2.7` | `demucs` |
 | `kaldi-python-io==1.2.2` | `nemo-toolkit-asr` |
@@ -64,9 +64,11 @@ For each of these pins, `--explain` reports no wheels published for the version,
 | `stable-ts==2.19.1` | Direct dependency |
 | `wget==3.2` | `nemo-toolkit-asr` |
 
+Most of these releases publish no wheels at all. editdistance 0.8.1 is the exception: it has wheels on PyPI up to CPython 3.12, but none for 3.13, and uv leaves wheels that can't serve the lock's `requires-python` out of `uv.lock`. It is also the one pin here with a C++ extension, so building it needs a compiler.
+
 A `source` result means an sdist is available, not that native compilation is necessarily required or that a build will fail. Retaining these pins means validating the source-build path in packaging CI, including any system tools each package needs.
 
-`--suggest` finds wheels on all three targets for **intervaltree 3.2.1**, **julius 0.2.8**, and **antlr4-python3-runtime 4.11.0**. pip confirms those nine candidate cells. These are artifact-availability suggestions, not a solved dependency update: in particular, [Hydra 1.3.2's published metadata](https://pypi.org/pypi/hydra-core/1.3.2/json) requires `antlr4-python3-runtime==4.9.*`, so directly overriding it with 4.11.0 violates that requirement. Any change must go through the project's resolver and compatibility tests; a compatible upstream dependency update may be needed.
+`--suggest` finds wheels on all three targets for **intervaltree 3.2.1**, **julius 0.2.8**, and **antlr4-python3-runtime 4.11.0**. pip confirms those nine candidate cells. These are artifact-availability suggestions, not a solved dependency update: in particular, [Hydra 1.3.2](https://pypi.org/pypi/hydra-core/1.3.2/json) and [omegaconf 2.3.0](https://pypi.org/pypi/omegaconf/2.3.0/json) both require `antlr4-python3-runtime==4.9.*` in their published metadata, so directly overriding it with 4.11.0 violates both requirements. Any change must go through the project's resolver and compatibility tests; a compatible upstream dependency update may be needed.
 
 For the other eight pins, no newer release with a suitable wheel was found. The older wheels mentioned for `kaldi-python-io` and `sox` are not a reason to downgrade a working dependency graph blindly. Keeping the source build is a valid option; removing a backend would be a separate product decision, not an automatic wheelgap fix.
 
