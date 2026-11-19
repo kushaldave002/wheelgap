@@ -1101,3 +1101,48 @@ def test_script_deps_resolve_what_it_installs(index, capsys, tmp_path):
     out, err = capsys.readouterr()
     assert {p["name"] for p in json.loads(out)["packages"]} == {"app", "lib", "crypt", "winonly"}
     assert "direct dependencies only" not in err
+
+
+@pytest.mark.parametrize("script", [False, True])
+def test_project_deps_respect_exclude_newer(index, monkeypatch, tmp_path, capsys, script):
+    monkeypatch.setitem(INDEX, "dated", {"1.0": release(), "2.0": release()})
+    fetch_json = pypi.fetch_json
+
+    def dated_json(url, **kwargs):
+        data = fetch_json(url, **kwargs)
+        for entries in [*data.get("releases", {}).values(), data.get("urls", [])]:
+            for entry in entries:
+                entry["upload_time_iso_8601"] = (
+                    "2025-02-01T00:00:00Z" if "dated-2.0" in entry["filename"] else "2024-01-01T00:00:00Z"
+                )
+        return data
+
+    monkeypatch.setattr(pypi, "fetch_json", dated_json)
+    if script:
+        path = tmp_path / "example.py"
+        path.write_text(
+            '# /// script\n# dependencies = ["dated>=1"]\n# [tool.uv]\n'
+            '# exclude-newer = "2025-01-01T00:00:00Z"\n# ///\n',
+            encoding="utf-8",
+        )
+    else:
+        path = tmp_path / "pyproject.toml"
+        path.write_text(
+            '[project]\ndependencies = ["dated>=1"]\n[tool.uv]\nexclude-newer = "2025-01-01T00:00:00Z"\n',
+            encoding="utf-8",
+        )
+    assert main([str(path), "--deps", "-p", "3.14", "-t", "win-arm64", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["packages"][0]["version"] == "1.0"
+
+
+def test_project_deps_cutoff_does_not_change_an_exact_pin(index, tmp_path, capsys):
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        '[project]\ndependencies = ["app==1.0"]\n[tool.uv]\nexclude-newer = "1900-01-01T00:00:00Z"\n',
+        encoding="utf-8",
+    )
+    # app is exempt, but its unpinned lib dependency has no upload timestamps in this fake index.
+    assert main([str(path), "--deps", "-p", "3.14", "-t", "win-arm64", "--json"]) == 1
+    packages = {p["name"]: p for p in json.loads(capsys.readouterr().out)["packages"]}
+    assert packages["app"]["version"] == "1.0"
+    assert "no valid upload_time_iso_8601" in packages["lib"]["error"]

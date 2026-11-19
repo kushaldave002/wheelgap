@@ -8,6 +8,7 @@ import shlex
 import tomllib
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import ParseResult, unquote, urlparse
@@ -23,6 +24,8 @@ from packaging.utils import (
     parse_wheel_filename,
 )
 from packaging.version import InvalidVersion, Version
+
+from .cutoff import parse_cutoff
 
 if TYPE_CHECKING:
     from .targets import Target
@@ -89,6 +92,7 @@ class Package:
     # PyPI project metadata URLs (project_urls and home_page).
     project_urls: dict[str, str] | None = None
     home_page: str | None = None
+    exclude_newer: datetime | None = field(default=None, repr=False, compare=False)
 
     @property
     def key(self) -> str:
@@ -141,6 +145,8 @@ class Source:
     root_groups: dict[int, str] = field(default_factory=dict)
     # uv.lock only: the project's requires-python. uv keeps only the wheels that can serve it.
     requires_python: str | None = None
+    exclude_newer: datetime | None = None
+    exclude_newer_package: bool = False
     # Retain uv edge provenance for an explicit installation selection. The existing flattened
     # graph remains untouched, preserving conservative behavior when no selectors are supplied.
     uv_packages: list[dict] | None = None
@@ -1384,6 +1390,13 @@ def _project_source(data: dict, path: Path, script: bool = False) -> Source:
         pyproject_dynamic_extras="optional-dependencies" in dynamic,
         pypi_only=not (_names_an_index(data) or _nearby_config_names_an_index(path)),
     )
+    uv = _table(_table(data, "tool"), "uv")
+    if "exclude-newer" in uv:
+        try:
+            source.exclude_newer = parse_cutoff(uv["exclude-newer"])
+        except ValueError as e:
+            raise SourceError(f"{path}: [tool.uv] exclude-newer must be a date or RFC 3339 timestamp: {e}") from None
+    source.exclude_newer_package = "exclude-newer-package" in uv
     if isinstance(requires_python := project.get("requires-python"), str):
         source.requires_python = requires_python
     if isinstance(name := project.get("name"), str):
@@ -1522,6 +1535,10 @@ def _add_extras(source: Source, wanted: list[str]) -> None:
                 source.specs.append(line)
             if pkg not in source.packages:  # also in another extra or in dependencies: one row
                 source.packages.append(pkg)
+
+    for pkg in source.packages:
+        if pkg.version is None:
+            pkg.exclude_newer = source.exclude_newer
 
 
 def requirement_to_package(text: str, origin: str) -> Package:

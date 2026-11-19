@@ -2194,6 +2194,8 @@ def _main(argv: list[str], project: Path | None = None) -> int:
             if source.poetry_extras_unsure is not None:
                 print(f"wheelgap: note: {source.label}: {source.poetry_extras_unsure}", file=sys.stderr)
     for source in sources:
+        if source.exclude_newer_package and not quiet:
+            print(f"wheelgap: note: {source.label}: exclude-newer-package isn't read", file=sys.stderr)
         if source.pyproject_extras is not None:  # always: this answer differs from a lockfile's
             if source.deps_paths is None:
                 print(

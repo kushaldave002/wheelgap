@@ -25,6 +25,7 @@ from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass, field
+from datetime import datetime
 from urllib.parse import quote
 
 from packaging.requirements import InvalidRequirement, Requirement
@@ -77,6 +78,8 @@ class Resolver:
         # resolve_deps for the source being resolved: pip picks releases under it, so pick() does too.
         self.policy: Callable[[str], tuple[bool, bool]] | None = None
         self._metadata: dict[str, list[str] | Exception] = {}  # a wheel's .metadata URL -> its Requires-Dist
+        self.exclude_newer: datetime | None = None
+        self._cutoff_exempt: set[tuple[str, str, Target]] = set()
         self.prefetch = prefetch
         self._pool: DownloadPool | None = None
         self._project_jobs: dict[str, Future] = {}
@@ -140,6 +143,7 @@ class Resolver:
     def _wheels(self, key: str, version: str, target: Target) -> list[dict]:
         """The wheels whose metadata determines this release's dependencies on the target."""
         files = pypi._files(self._project(key)["releases"].get(version, []))
+        files = pypi.before_cutoff(files, None if (key, version, target) in self._cutoff_exempt else self.exclude_newer)
         files = [e for e in files if not e.get("yanked")] or files  # every file of a yanked release is yanked
         wheels = [e for e in files if e["filename"].endswith(".whl") and isinstance(e.get("url"), str)]
         own = [e for e in wheels if rejection(e["filename"], target) is None]
@@ -270,6 +274,7 @@ class Resolver:
         python = f"{target.major}.{target.minor}"
         releases = self._project(key)["releases"]
         exact = {s.version for spec in specs for s in SpecifierSet(spec) if s.operator in ("==", "===")}
+        combined = SpecifierSet(",".join(s for s in specs if s))
         usable: dict[Version, str] = {}
         installable: dict[Version, str] = {}
         for text, entries in releases.items():
@@ -278,7 +283,12 @@ class Resolver:
                 files = pypi._files(entries)
             except (InvalidVersion, ValueError):
                 continue
+            if not combined.contains(version, prereleases=True):
+                continue
             pinned = text in exact or str(version) in exact
+            if pinned:
+                self._cutoff_exempt.add((key, text, target))
+            files = pypi.before_cutoff(files, None if pinned else self.exclude_newer)
             # pip installs only wheels and sdists: not an .egg, .exe or .msi.
             live = [
                 e
@@ -296,11 +306,12 @@ class Resolver:
                 for e in live
             ):
                 installable[version] = text
-        combined = SpecifierSet(",".join(s for s in specs if s))
         chosen = max(combined.filter(installable), default=None) or max(combined.filter(usable), default=None)
         return usable[chosen] if chosen is not None else None
 
     def _round(self, roots: list[Requirement], target: Target, learned: dict[str, set[str]]) -> _Tree | _Conflict:
+        # A restarted walk must not inherit an exact pin from an abandoned dependency path.
+        self._cutoff_exempt = {entry for entry in self._cutoff_exempt if entry[2] != target}
         python = f"{target.major}.{target.minor}"  # for messages
         tree = _Tree()
         extras: dict[str, frozenset[str]] = {}
@@ -517,12 +528,14 @@ def _direct_roots(
 def resolve_deps(source: Source, targets: list[Target], resolver: Resolver | None = None) -> None:
     """Replace the source's packages with what its requirements install on each target."""
     resolver = resolver or Resolver()
+    resolver.exclude_newer = source.exclude_newer
+    resolver._cutoff_exempt.clear()
     resolver.policy = source.format_control.policy if source.requirements and source.format_control else None
     roots = [Requirement(text) for text in source.specs]
     kept = [p for p in source.packages if p.skip]  # a name @ URL: nothing to look up, as without --deps
     roots = [r for r in roots if not r.url]
     packages: list[Package] = list(kept)
-    index: dict[tuple[str, str | None, str | None], int] = {}
+    index: dict[tuple[str, str | None, str | None, datetime | None], int] = {}
     deps_paths: dict[Target, dict[int, list[str]]] = {}
     deps_direct: dict[Target, dict[int, tuple[str, ...]]] = {}
     for target in targets:
@@ -550,11 +563,20 @@ def resolve_deps(source: Source, targets: list[Target], resolver: Resolver | Non
             version, error = tree.chosen.get(key), tree.errors.get(key)
             if version is None and error is None:
                 continue
-            ident = (key, version, None if version else error)
+            cutoff = None if (key, version, target) in resolver._cutoff_exempt else source.exclude_newer
+            ident = (key, version, None if version else error, cutoff)
             if ident not in index:
                 name = resolver.names.get(key, path[-1])
                 index[ident] = len(packages)
-                packages.append(Package(name, version, error=error if version is None else None, origin="--deps"))
+                packages.append(
+                    Package(
+                        name,
+                        version,
+                        error=error if version is None else None,
+                        origin="--deps",
+                        exclude_newer=cutoff,
+                    )
+                )
             i = index[ident]
             if version is not None and error is not None:
                 packages[i].error = error  # its dependencies couldn't be read: unknown, not a clean bill

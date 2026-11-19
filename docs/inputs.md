@@ -366,6 +366,8 @@ kept where wheelgap doesn't read them (check a lockfile instead).
 
 `check_lockfile()` and `wheelgap diff` don't read `pyproject.toml` as an input.
 
+For upload-date limits on range resolution, see [Resolution upload cutoffs](#resolution-upload-cutoffs).
+
 ## Python scripts
 
 A single-file script can declare what it needs in a `# /// script` block
@@ -403,6 +405,24 @@ lines to add to the block for `uv run`. To check what the script installs, pass 
 `check_lockfile()` and `wheelgap diff` don't read a script.
 
 A `.py` argument that isn't an existing file, such as `discord.py`, is still a [package name](#package-names).
+
+
+Script metadata can also set an [upload cutoff](#resolution-upload-cutoffs) for range resolution.
+
+## Resolution upload cutoffs
+
+For `pyproject.toml` inputs and PEP 723 scripts, `[tool.uv] exclude-newer` limits range and unpinned
+resolution to files uploaded before the cutoff, including with `--deps`. Use an RFC 3339 timestamp
+with an explicit offset (for example `"2025-01-01T00:00:00Z"`), or a `"YYYY-MM-DD"` date, which includes
+that whole local day as uv does. Relative durations and invalid values are input errors. Exact version
+pins are unaffected; unpinned transitive requirements still use the cutoff.
+
+A file without a valid PyPI `upload_time_iso_8601` makes that package unknown rather than being assumed
+old enough. Explicit simple indexes (`--index-url`) are refused for cutoff resolution because this reader
+cannot establish their upload times. Only the script block or the input `pyproject.toml` is read for this
+setting: requirements files, uv.toml, environment variables and uv's command-line options are not.
+`exclude-newer-package` is not applied; the command prints a note if that key is present.
+
 
 ## Package names
 

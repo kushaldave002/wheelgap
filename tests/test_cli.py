@@ -4491,3 +4491,99 @@ def test_script_deps_refuses_private_index(capsys, fake_pypi, tmp_path):
     assert "the script configures an installer index or source; --deps uses only PyPI" in err
     assert "--deps uses only PyPI, so check its lock (uv lock --script) instead" in err
     assert fake_pypi == []
+
+
+@pytest.mark.parametrize("script", [False, True])
+@pytest.mark.parametrize("cutoff", ["2025-01-01", "2025-01-02T00:00:00Z"])
+def test_project_exclude_newer_limits_range_resolution(fake_pypi, capsys, tmp_path, monkeypatch, script, cutoff):
+    from conftest import FAKE_INDEX
+
+    monkeypatch.setitem(
+        FAKE_INDEX,
+        "dated",
+        {
+            "1.0": [{"filename": "dated-1.0-py3-none-any.whl", "upload_time_iso_8601": "2024-01-01T00:00:00Z"}],
+            "2.0": [{"filename": "dated-2.0.tar.gz", "upload_time_iso_8601": "2025-02-01T00:00:00Z"}],
+        },
+    )
+    if script:
+        path = tmp_path / "example.py"
+        path.write_text(
+            f'# /// script\n# dependencies = ["dated>=1"]\n# [tool.uv]\n# exclude-newer = "{cutoff}"\n# ///\n',
+            encoding="utf-8",
+        )
+    else:
+        path = tmp_path / "pyproject.toml"
+        path.write_text(
+            f'[project]\ndependencies = ["dated>=1"]\n[tool.uv]\nexclude-newer = "{cutoff}"\n', encoding="utf-8"
+        )
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64", "--json")
+    assert code == 0
+    assert json.loads(out)["packages"][0]["version"] == "1.0"
+
+
+@pytest.mark.parametrize("value", ['"1 week"', '"2025-02-30"', '"2025-01-01T00:00:00"', "123"])
+def test_project_exclude_newer_rejects_invalid_cutoffs(fake_pypi, capsys, tmp_path, value):
+    path = tmp_path / "pyproject.toml"
+    path.write_text(f'[project]\ndependencies = ["nowheels"]\n[tool.uv]\nexclude-newer = {value}\n', encoding="utf-8")
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64")
+    assert code == 2
+    assert "exclude-newer" in err
+    assert fake_pypi == []
+
+
+@pytest.mark.parametrize("requirement, expected", [("dated", "1.0"), ("dated==2.0", "2.0")])
+def test_project_exclude_newer_keeps_exact_pins_unaffected(
+    fake_pypi, capsys, tmp_path, monkeypatch, requirement, expected
+):
+    from conftest import FAKE_INDEX
+
+    monkeypatch.setitem(
+        FAKE_INDEX,
+        "dated",
+        {
+            "1.0": [{"filename": "dated-1.0-py3-none-any.whl", "upload_time_iso_8601": "2024-01-01T00:00:00Z"}],
+            "2.0": [{"filename": "dated-2.0-py3-none-any.whl", "upload_time_iso_8601": "2025-02-01T00:00:00Z"}],
+        },
+    )
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        f'[project]\ndependencies = ["{requirement}"]\n[tool.uv]\nexclude-newer = "2025-01-01"\n', encoding="utf-8"
+    )
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64", "--json")
+    assert code == 0
+    assert json.loads(out)["packages"][0]["version"] == expected
+
+
+def test_project_exclude_newer_refuses_unknown_upload_time(fake_pypi, capsys, tmp_path):
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        '[project]\ndependencies = ["ranged>=1"]\n[tool.uv]\nexclude-newer = "2025-01-01"\n', encoding="utf-8"
+    )
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64", "--json")
+    assert code == 1
+    package = json.loads(out)["packages"][0]
+    assert package["results"] == {"win-arm64": "unknown"}
+    assert "no valid upload_time_iso_8601" in package["error"]
+
+
+def test_project_exclude_newer_applies_to_selected_extra(fake_pypi, capsys, tmp_path, monkeypatch):
+    from conftest import FAKE_INDEX
+
+    monkeypatch.setitem(
+        FAKE_INDEX,
+        "dated",
+        {
+            "1.0": [{"filename": "dated-1.0-py3-none-any.whl", "upload_time_iso_8601": "2024-01-01T00:00:00Z"}],
+            "2.0": [{"filename": "dated-2.0.tar.gz", "upload_time_iso_8601": "2025-02-01T00:00:00Z"}],
+        },
+    )
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        '[project]\ndependencies = ["dated>=1"]\n[project.optional-dependencies]\ntest = ["dated>=1"]\n'
+        '[tool.uv]\nexclude-newer = "2025-01-01T00:00:00Z"\n',
+        encoding="utf-8",
+    )
+    code, out, err = run(capsys, str(path), "--extra", "test", "-p", "3.13", "-t", "win-arm64", "--json")
+    assert code == 0
+    assert [(p["name"], p["version"]) for p in json.loads(out)["packages"]] == [("dated", "1.0")]
