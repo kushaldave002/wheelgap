@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The Python API's `check_lockfile()` selects extras and dependency groups, including PEP 735 groups with `deps=True`, through explicit keyword arguments (#539, thanks [@kushaldave002](https://github.com/kushaldave002)).
+
 - MCP `check_package`, `check_lockfile`, `check_dist` and `diff_lockfiles` take `ios` and `android_api` for mobile targets. `diff_lockfiles` also takes `glibc`, `musl` and `macos`, and `list_targets` reports the built-in defaults for all five floors. (#533, thanks [@jamesyshd19-cmyk](https://github.com/jamesyshd19-cmyk))
 - `--dockerfile-inputs` (with `--dockerfile`) checks the requirements files the Dockerfile's final stage installs with `RUN pip install -r FILE`, followed back through `WORKDIR` and `COPY` to the build context, on the image's Python and platform. Only a strict subset is read: any other RUN than that and system package commands (`apt-get`, `apk`...), and anything else that may change what pip installs or what the file holds (`--mount`, `ADD`, `COPY --from`, `ENV`/`ARG PIP_*`, a `pip.conf`, a `.dockerignore` and so on), is an error naming its line. Plain `--dockerfile` is unchanged. (#530)
 - `wheelgap pyproject.toml --group NAME` and `--only-group NAME` now check dependency groups in files with no `[project]` table. With no group selected, wheelgap lists the available groups. (#531, thanks [@jamesyshd19-cmyk](https://github.com/jamesyshd19-cmyk))
