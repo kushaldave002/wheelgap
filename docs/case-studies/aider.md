@@ -34,7 +34,7 @@ uvx --from wheelgap==0.13.0 python -m wheelgap requirements.txt \
   --json --explain --suggest --no-cache > report.json
 ```
 
-The command exited **0**. Its JSON summary, with targets shown as columns, was:
+The command exited **0**. Its JSON summary, one row per target, was:
 
 | Python | Packages | Target | Source | Missing | Unknown |
 | --- | ---: | --- | ---: | ---: | ---: |
@@ -63,6 +63,8 @@ for target in ("linux-x86_64", "win-amd64"):
     ]
     Path(f"{target}-pins.txt").write_text("\n".join(pins) + "\n")
 ```
+
+The pins files list only `wheel` cells, so if a re-run reports any `source` or `missing` package, it is left out of the pip check: compare the pip count with the wheelgap package count, as below.
 
 This verification used pip **26.3**. Windows needs one platform tag:
 
