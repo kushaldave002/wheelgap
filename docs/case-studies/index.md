@@ -4,3 +4,4 @@ These pages check real open-source projects on the platforms their build configu
 
 - [mitmproxy: runtime dependencies on five build platforms](mitmproxy.md)
 - [FastAPI: CPython 3.15 test dependencies across three platforms](fastapi.md)
+- [Buzz: speech-to-text dependencies across three desktop targets](buzz.md)
