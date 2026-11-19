@@ -249,6 +249,10 @@ TOOLS: list[dict[str, Any]] = [
             "report the packages without a wheel on some target. Environment markers, .python-version and the "
             "project's [tool.wheelgap] settings (targets, python, glibc, ignore, offline, index-url, ...) apply; "
             "arguments given here override them, except that offline = true in the project can't be turned off. "
+            "By default uv.lock, poetry.lock and pdm.lock check every extra and dependency group unless project "
+            "config selects them. Match deployment with extras, all_extras, groups, only_groups and no_dev, as the "
+            "CLI's --extra, --all-extras, --group, --only-group and --no-dev do. For pyproject.toml, select PEP 735 "
+            "groups explicitly with groups or only_groups; they aren't checked by default. "
             "Notes and errors name command-line flags (--offline is the offline argument here, --deps the "
             "dependencies argument). "
             "Packages from git, paths, URLs or private indexes are listed under "
@@ -291,6 +295,31 @@ TOOLS: list[dict[str, Any]] = [
                 "offline": {
                     "type": "boolean",
                     "description": "Use only the files recorded in the lockfile; never contact the index.",
+                },
+                "extras": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional dependency extras to install, as --extra NAME. Overrides project extras.",
+                },
+                "all_extras": {
+                    "type": "boolean",
+                    "description": "Install all optional dependency extras, as --all-extras. Default: false.",
+                },
+                "groups": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Dependency groups to include, as --group NAME. Overrides project groups.",
+                },
+                "only_groups": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Check only these dependency groups, without project dependencies, "
+                    "as --only-group NAME.",
+                },
+                "no_dev": {
+                    "type": "boolean",
+                    "description": "Leave out development dependencies, as --no-dev. Default: false. "
+                    "The CLI validates where it applies.",
                 },
                 "dependencies": {
                     "type": "boolean",
@@ -527,13 +556,17 @@ def _string(args: dict[str, Any], key: str, *, required: bool = False) -> str | 
     return value
 
 
-def _platforms(args: dict[str, Any]) -> list[str]:
-    platforms = args.get("targets")
-    if platforms is None:
+def _strings(args: dict[str, Any], key: str) -> list[str]:
+    values = args.get(key)
+    if values is None:
         return []
-    if not isinstance(platforms, list) or not all(isinstance(p, str) for p in platforms):
-        raise ToolError("'targets' must be an array of strings")
-    return [p.strip() for p in platforms if p.strip()]
+    if not isinstance(values, list) or not all(isinstance(p, str) for p in values):
+        raise ToolError(f"'{key}' must be an array of strings")
+    return [p.strip() for p in values if p.strip()]
+
+
+def _platforms(args: dict[str, Any]) -> list[str]:
+    return _strings(args, "targets")
 
 
 def _pythons(args: dict[str, Any]) -> list[str]:
@@ -718,6 +751,11 @@ def _check_lockfile(args: dict[str, Any]) -> dict[str, Any]:
     path = _existing(raw)
     # --name=value forms, and -- before the path, so no value can be read as another option.
     argv = ["--json"]
+    for key, flag in (("extras", "extra"), ("groups", "group"), ("only_groups", "only-group")):
+        argv += [f"--{flag}={name}" for name in _strings(args, key)]
+    for key, flag in (("all_extras", "all-extras"), ("no_dev", "no-dev")):
+        if _flag(args, key):
+            argv.append(f"--{flag}")
     if environment is not None:
         argv.append(f"--environment={environment}")
     argv += [f"--python={p}" for p in _pythons(args)]
@@ -1550,7 +1588,7 @@ def _argument_problem(params: dict[str, Any]) -> str | None:
                 if not isinstance(arguments[key], bool):
                     raise ToolError(f"'{key}' must be true or false")
             elif prop["type"] == "array":
-                _platforms(arguments)
+                _strings(arguments, key)
     except ToolError as e:
         return str(e)
     return None

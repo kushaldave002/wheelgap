@@ -171,6 +171,16 @@ for `check_dist` the nearest folder above the dist folder with a
 | `pyodide_lock` | string | `[tool.wheelgap] pyodide-lock` (when a pyodide target is checked) | Absolute path or https URL of a Pyodide release's `pyodide-lock.json`. |
 | `offline` | boolean | `[tool.wheelgap] offline`, else `false` | Use only the files recorded in the lockfile; never contact the index. `true` turns it on; `offline = true` in the project can't be turned off from here. |
 | `dependencies` | boolean | `false` | Resolve transitive dependencies of requirements files, a conda `environment.yml`, `pyproject.toml` and a script's `# /// script` block with `--deps`; each gap gets `via` and `direct`. Refused for lockfiles, offline and another index. |
+| `extras` | array of strings | project extras, else conservative for lockfiles | Install these optional dependency extras, as `--extra NAME`. |
+| `all_extras` | boolean | `false` | Install all optional dependency extras, as `--all-extras`. |
+| `groups` | array of strings | project groups, else conservative for lockfiles | Include these dependency groups, as `--group NAME`. |
+| `only_groups` | array of strings | none | Check only these groups, without project dependencies, as `--only-group NAME`. |
+| `no_dev` | boolean | `false` | Leave out development dependencies, as `--no-dev`; the CLI validates which inputs support it. |
+
+Without a project selection, `uv.lock`, `poetry.lock` and `pdm.lock` conservatively check every extra and group.
+Match the deployment explicitly, for example `{"no_dev": true, "extras": ["api"]}` for production with the API
+extra, or `{"only_groups": ["test"]}` to check only a `pyproject.toml` PEP 735 test group. Pyproject groups require
+explicit selection. Unknown names, unsupported inputs and incompatible combinations return the CLI's error.
 
 #### `check_dockerfile`
 

@@ -2950,3 +2950,75 @@ def test_check_lockfile_dependencies_skips_build_info_when_configured(fake_pypi,
     data = reply["result"]["structuredContent"]
     assert data["ok"] is False
     assert fake_files.calls == []
+
+
+@pytest.mark.parametrize(
+    ("selection", "packages", "gaps"),
+    [
+        ({}, 11, {"gpu", "devtool", "docstool", "unused"}),
+        ({"no_dev": True}, 4, set()),
+        ({"extras": ["api"], "no_dev": True}, 7, set()),
+        ({"all_extras": True}, 9, {"gpu", "devtool"}),
+        ({"groups": ["docs"]}, 6, {"devtool", "docstool"}),
+        ({"only_groups": ["docs"]}, 1, {"docstool"}),
+    ],
+)
+def test_check_lockfile_selects_uv_extras_and_groups_offline(fixtures, tmp_path, fake_pypi, selection, packages, gaps):
+    # Reuse the selection graph, with an sdist-only dev tool to demonstrate the production-only case.
+    text = (fixtures / "uvselect" / "uv.lock").read_text(encoding="utf-8")
+    text = text.replace(
+        'wheels = [{ url = "https://example.invalid/devtool-1.0-py3-none-any.whl" }]',
+        'sdist = { url = "https://example.invalid/devtool-1.0.tar.gz" }',
+    )
+    lock = tmp_path / "uv.lock"
+    lock.write_text(text, encoding="utf-8")
+    (_, reply) = run(
+        init(),
+        call("check_lockfile", path=str(lock), python="3.13", targets=["linux-x86_64"], offline=True, **selection),
+    )
+    assert reply["result"]["isError"] is False
+    data = reply["result"]["structuredContent"]
+    assert data["packages"] == packages
+    assert {p["name"] for p in data["gaps"]} == gaps
+    assert data["ok"] is (not gaps)
+    assert fake_pypi == []
+
+
+def test_check_lockfile_selects_a_pyproject_group(tmp_path, fake_pypi):
+    project = tmp_path / "pyproject.toml"
+    project.write_text(
+        '[project]\nname = "app"\ndependencies = ["purewheel==3.1"]\n[dependency-groups]\ntest = ["winonly==311"]\n',
+        encoding="utf-8",
+    )
+    (_, reply) = run(
+        init(), call("check_lockfile", path=str(project), python="3.13", targets=["linux-x86_64"], only_groups=["test"])
+    )
+    assert reply["result"]["isError"] is False
+    data = reply["result"]["structuredContent"]
+    assert data["packages"] == 1
+    assert [p["name"] for p in data["gaps"]] == ["winonly"]
+    assert fake_pypi == ["https://pypi.org/pypi/winonly/311/json"]
+
+
+@pytest.mark.parametrize("selection", [{"groups": ["absent"]}, {"no_dev": True}])
+def test_check_lockfile_selection_preserves_cli_refusals(tmp_path, fixtures, selection):
+    path = fixtures / "uvselect" if "groups" in selection else tmp_path / "requirements.txt"
+    if path.suffix == ".txt":
+        path.write_text("purewheel==3.1\n", encoding="utf-8")
+    (_, reply) = run(init(), call("check_lockfile", path=str(path), **selection))
+    assert reply["result"]["isError"] is True
+    text = reply["result"]["content"][0]["text"]
+    expected = "unknown groups: absent" if "groups" in selection else "extra/group selection requires"
+    assert expected in text
+    assert "unknown argument" not in text
+
+
+@pytest.mark.parametrize("key", ["extras", "groups", "only_groups", "all_extras", "no_dev"])
+@pytest.mark.parametrize("value", ["test", [1]])
+def test_check_lockfile_selection_types_are_checked_before_requesting_roots(key, value):
+    message = with_roots(modern_call("check_lockfile", path="uv.lock", **{key: value}))
+    (reply,) = run(message)
+    assert reply["result"]["resultType"] == "complete"
+    assert reply["result"]["isError"] is True
+    expected = f"'{key}' must be " + ("true or false" if key in {"all_extras", "no_dev"} else "an array of strings")
+    assert expected in reply["result"]["content"][0]["text"]
