@@ -8,4 +8,4 @@ These pages check real open-source projects on the platforms their build configu
 - [Aider: Python 3.14 wheels on Linux and Windows](aider.md)
 - [pydantic: CPython 3.14 test dependencies across three platforms](pydantic.md)
 - [HERD: a 136-package service platform on ARM, Alpine and Windows on ARM](herd.md)
-- [Typer: regular Python 3.15 wheels on Linux and Windows](typer.md)
+- [Typer: CPython 3.15 and 3.15t test dependencies across three platforms](typer.md)
