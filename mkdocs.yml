@@ -79,6 +79,13 @@ nav:
       - FastAPI: case-studies/fastapi.md
       - Buzz: case-studies/buzz.md
       - Aider: case-studies/aider.md
+      - Textual: case-studies/textual.md
+      - Poetry: case-studies/poetry.md
+      - Fava: case-studies/fava.md
+      - Typer: case-studies/typer.md
+      - PDM: case-studies/pdm.md
+      - Streamlit: case-studies/streamlit.md
+      - Litestar: case-studies/litestar.md
       - FastMCP: case-studies/fastmcp.md
       - pydantic: case-studies/pydantic.md
       - HERD: case-studies/herd.md
