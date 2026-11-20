@@ -249,10 +249,11 @@ TOOLS: list[dict[str, Any]] = [
             "report the packages without a wheel on some target. Environment markers, .python-version and the "
             "project's [tool.wheelgap] settings (targets, python, glibc, ignore, offline, index-url, ...) apply; "
             "arguments given here override them, except that offline = true in the project can't be turned off. "
-            "By default uv.lock, poetry.lock and pdm.lock check every extra and dependency group unless project "
-            "config selects them. Match deployment with extras, all_extras, groups, only_groups and no_dev, as the "
-            "CLI's --extra, --all-extras, --group, --only-group and --no-dev do. For pyproject.toml, select PEP 735 "
-            "groups explicitly with groups or only_groups; they aren't checked by default. "
+            "A uv.lock, poetry.lock or pdm.lock is checked for every extra and dependency group unless [tool.wheelgap] "
+            "extras or groups select some, so it may report gaps the deployment never installs: match the deployment "
+            "with extras, all_extras, groups, only_groups and no_dev (--extra, --all-extras, --group, --only-group, "
+            "--no-dev), e.g. no_dev: true for a production install. A pyproject.toml's PEP 735 groups are checked "
+            "only when groups or only_groups name them. "
             "Notes and errors name command-line flags (--offline is the offline argument here, --deps the "
             "dependencies argument). "
             "Packages from git, paths, URLs or private indexes are listed under "
@@ -299,27 +300,31 @@ TOOLS: list[dict[str, Any]] = [
                 "extras": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional dependency extras to install, as --extra NAME. Overrides project extras.",
+                    "description": "Extras to install, as --extra NAME (uv.lock, poetry.lock, pyproject.toml). "
+                    "Replaces [tool.wheelgap] extras; an empty array is the same as leaving it out.",
                 },
                 "all_extras": {
                     "type": "boolean",
-                    "description": "Install all optional dependency extras, as --all-extras. Default: false.",
+                    "description": "Install every extra, as --all-extras (uv.lock, poetry.lock, pyproject.toml). "
+                    "Default: false.",
                 },
                 "groups": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Dependency groups to include, as --group NAME. Overrides project groups.",
+                    "description": "Dependency groups to include, as --group NAME (uv.lock, Poetry 2.x poetry.lock, "
+                    "pdm.lock, pyproject.toml [dependency-groups]). Replaces [tool.wheelgap] groups; an empty array "
+                    "is the same as leaving it out.",
                 },
                 "only_groups": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Check only these dependency groups, without project dependencies, "
-                    "as --only-group NAME.",
+                    "description": "Check only these dependency groups, as --only-group NAME: the project's own "
+                    "dependencies are left out unless a group names them.",
                 },
                 "no_dev": {
                     "type": "boolean",
-                    "description": "Leave out development dependencies, as --no-dev. Default: false. "
-                    "The CLI validates where it applies.",
+                    "description": "Leave out the dev group, as --no-dev (uv.lock, Poetry 2.x poetry.lock, pdm.lock; "
+                    "refused for pyproject.toml). Default: false.",
                 },
                 "dependencies": {
                     "type": "boolean",

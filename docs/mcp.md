@@ -171,16 +171,19 @@ for `check_dist` the nearest folder above the dist folder with a
 | `pyodide_lock` | string | `[tool.wheelgap] pyodide-lock` (when a pyodide target is checked) | Absolute path or https URL of a Pyodide release's `pyodide-lock.json`. |
 | `offline` | boolean | `[tool.wheelgap] offline`, else `false` | Use only the files recorded in the lockfile; never contact the index. `true` turns it on; `offline = true` in the project can't be turned off from here. |
 | `dependencies` | boolean | `false` | Resolve transitive dependencies of requirements files, a conda `environment.yml`, `pyproject.toml` and a script's `# /// script` block with `--deps`; each gap gets `via` and `direct`. Refused for lockfiles, offline and another index. |
-| `extras` | array of strings | project extras, else conservative for lockfiles | Install these optional dependency extras, as `--extra NAME`. |
-| `all_extras` | boolean | `false` | Install all optional dependency extras, as `--all-extras`. |
-| `groups` | array of strings | project groups, else conservative for lockfiles | Include these dependency groups, as `--group NAME`. |
-| `only_groups` | array of strings | none | Check only these groups, without project dependencies, as `--only-group NAME`. |
-| `no_dev` | boolean | `false` | Leave out development dependencies, as `--no-dev`; the CLI validates which inputs support it. |
+| `extras` | array of strings | `[tool.wheelgap] extras`, else every extra of a `uv.lock` or `poetry.lock`, none of a `pyproject.toml` | Install these extras, as `--extra NAME`: a uv or Poetry project extra, or a `pyproject.toml` `[project] optional-dependencies` group. Not for `pdm.lock`. |
+| `all_extras` | boolean | `false` | Install every extra, as `--all-extras` (`uv.lock`, `poetry.lock`, `pyproject.toml`). |
+| `groups` | array of strings | `[tool.wheelgap] groups`, else every group of a lockfile, none of a `pyproject.toml` | Include these dependency groups, as `--group NAME` (`uv.lock`, Poetry 2.x `poetry.lock`, `pdm.lock`, or `pyproject.toml` `[dependency-groups]`). |
+| `only_groups` | array of strings | none | Check only these dependency groups, as `--only-group NAME`: the project's own dependencies are left out unless a group names them. |
+| `no_dev` | boolean | `false` | Leave out the `dev` group, as `--no-dev` (`uv.lock`, Poetry 2.x `poetry.lock`, `pdm.lock`; refused for `pyproject.toml`, where no group is checked unless selected). |
 
-Without a project selection, `uv.lock`, `poetry.lock` and `pdm.lock` conservatively check every extra and group.
-Match the deployment explicitly, for example `{"no_dev": true, "extras": ["api"]}` for production with the API
-extra, or `{"only_groups": ["test"]}` to check only a `pyproject.toml` PEP 735 test group. Pyproject groups require
-explicit selection. Unknown names, unsupported inputs and incompatible combinations return the CLI's error.
+With none of these and no `[tool.wheelgap] extras` or `groups`, a `uv.lock`, `poetry.lock` or `pdm.lock` is checked
+for every extra and group, which may report gaps the deployment never installs. Match the deployment explicitly, for
+example `{"no_dev": true, "extras": ["api"]}` for a production install with the `api` extra, or
+`{"only_groups": ["test"]}` to check only a `pyproject.toml`'s PEP 735 `test` group. An empty array is the same as
+leaving the argument out. Other inputs (requirements files, `Pipfile.lock`, `pylock.toml`, `pixi.lock`, a script's
+`# /// script` block) refuse these arguments, and unknown names and incompatible combinations (`only_groups` with
+`extras` on a `uv.lock` or `pyproject.toml`, `no_dev` with `groups: ["dev"]`) return the command line's error.
 
 #### `check_dockerfile`
 
