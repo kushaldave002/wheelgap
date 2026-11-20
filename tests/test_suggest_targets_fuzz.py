@@ -305,8 +305,47 @@ def seq(rng, items, indent, raw=False, flow_only=False):
     return f"\n{pad}  [\n" + "".join(f"{pad}    {r},\n" for r in rendered) + f"{pad}  ]"
 
 
+def flow_key(rng, k):
+    """A flow mapping's key, plain or whole-quoted."""
+    return rng.choice([k, k, f"'{k}'", f'"{k}"'])
+
+
 def flow_map(rng, entry):
-    return "{" + ", ".join(f"{k}: {scalar(rng, v, flow=True)}" for k, v in entry.items()) + "}"
+    return "{" + ", ".join(f"{flow_key(rng, k)}: {scalar(rng, v, flow=True)}" for k, v in entry.items()) + "}"
+
+
+def flat_pairs(rng, pairs, base, flow_item=False):
+    """The `key: value` lines and closing `}` of a `{ ... }` mapping over several lines, with varied pair and
+    closing indentation (down to the smallest the reader allows), comment lines between pairs and after `}`,
+    and an optional trailing comma. `flow_item` marks a `}` inside a flow list, which may take the comma."""
+    lines = []
+    for i, (k, v) in enumerate(pairs):
+        inner = " " * (base + rng.randint(1, 5))  # each pair's indent may differ; > base is all YAML needs
+        if rng.random() < 0.15:
+            lines.append(f"{inner}# a comment")
+        comma = "," if i < len(pairs) - 1 or rng.random() < 0.5 else ""
+        lines.append(f"{inner}{flow_key(rng, k)}: {v}{comma}{comment(rng)}")
+    lines.append(" " * (base + rng.randint(0, 3)) + "}" + "," * flow_item + comment(rng))
+    return lines
+
+
+def multiline_quote(rng, v, base):
+    """The lines of a quoted scalar over several lines (never read): a random split point, varied continuation
+    indentation, optional blank lines, an `''`, `\\"` or `\\` escape at a line end, or a quote that closes mid-line."""
+    quote = rng.choice(["'", '"'])
+    text = v.replace(quote, "")
+    if quote == '"':
+        text = text.replace("\\", "")
+    cut = rng.randint(1, max(1, len(text) - 1)) if len(text) > 1 else 1
+    # `''` and `\"` end the line with what looks like a closing quote but isn't; `\` is an escaped line break.
+    tail = rng.choice(["", "", "", *(["''"] if quote == "'" else ['\\"', "\\"])])
+    lines = [quote + text[:cut] + tail]
+    pad = " " * (base + rng.randint(1, 5))
+    if rng.random() < 0.2:
+        lines.append("")
+    close = quote + ("junk" if rng.random() < 0.25 else comment(rng))
+    lines.append(pad + text[cut:] + close)
+    return lines
 
 
 def noise_step(rng, pad):
@@ -366,13 +405,27 @@ def realistic_job(rng):
                 lines.append(
                     f"        {name}:{seq(rng, [flow_map(rng, e) for e in entries], 8, raw=True, flow_only=True)}"
                 )
+            elif entries and rng.random() < 0.25:
+                # A flow list over several lines, holding one-line or multi-line flow mappings.
+                lines.append(f"        {name}: [{comment(rng)}")
+                item_pad = rng.randint(9, 13)
+                for e in entries:
+                    if rng.random() < 0.5:
+                        lines.append(" " * item_pad + "{" + comment(rng))
+                        pairs = [(k, scalar(rng, v, flow=True)) for k, v in e.items()]
+                        lines += flat_pairs(rng, pairs, item_pad, flow_item=True)
+                    else:
+                        lines.append(" " * item_pad + flow_map(rng, e) + ",")
+                    if rng.random() < 0.15:
+                        lines.append(" " * item_pad + "# a comment")
+                lines.append("        ]" + comment(rng))
             elif entries:
                 lines.append(f"        {name}:")
                 for e in entries:
                     if rng.random() < 0.5:
-                        lines.append("          - {")
-                        lines += [f"              {k}: {scalar(rng, v, flow=True)}," for k, v in e.items()]
-                        lines.append("            }")
+                        lines.append("          - {" + comment(rng))
+                        pairs = [(k, scalar(rng, v, flow=True)) for k, v in e.items()]
+                        lines += flat_pairs(rng, pairs, 10)
                         continue
                     first, *rest = e.items()
                     lines.append(f"          - {first[0]}: {scalar(rng, first[1])}")
@@ -393,10 +446,18 @@ def realistic_job(rng):
         if rng.random() < 0.5:
             steps.append(noise_step(rng, "      "))
         step = f"      - uses: {action}\n"
-        if inputs:
-            step += "        with:\n" + "".join(
-                f"          {k}: {v if '$' in v else scalar(rng, v)}{comment(rng)}\n" for k, v in inputs.items()
-            )
+        if inputs and rng.random() < 0.15:  # a flat `with: {` over several lines, the values actually read
+            pairs = [(k, f"'{v}'" if "$" in v else scalar(rng, v, flow=True)) for k, v in inputs.items()]
+            step += "        with: {" + comment(rng) + "\n"
+            step += "\n".join(flat_pairs(rng, pairs, 8)) + "\n"
+        elif inputs:
+            step += "        with:\n"
+            for k, v in inputs.items():
+                if "$" not in v and rng.random() < 0.12:  # a quoted value over several lines: never read
+                    qlines = multiline_quote(rng, v, 10)
+                    step += f"          {k}: {qlines[0]}\n" + "".join(f"{q}\n" for q in qlines[1:])
+                else:
+                    step += f"          {k}: {v if '$' in v else scalar(rng, v)}{comment(rng)}\n"
         steps.append(step)
     steps.append(noise_step(rng, "      "))
     return "\n".join(lines) + "\n" + "".join(steps)

@@ -5,12 +5,136 @@ from inspect import signature
 
 import pytest
 from test_deps import LIN, WIN, index  # noqa: F401  # index: test_deps' fake JSON API, a fixture
+from test_uv_selection import pdm_groups, poetry_extras, poetry_groups  # noqa: F401
 
 import wheelgap
 from wheelgap import Status
 from wheelgap.cli import main
 from wheelgap.pyodide import PyodideLockError, load_pyodide_lock
 from wheelgap.sources import SourceError
+
+
+@pytest.mark.parametrize(
+    "kwargs,flags",
+    [
+        ({"no_dev": True}, ["--no-dev"]),
+        ({"extras": ["API"]}, ["--extra", "API"]),
+        ({"all_extras": True}, ["--all-extras"]),
+        ({"groups": ["docs"]}, ["--group", "docs"]),
+        ({"only_groups": ["docs"]}, ["--only-group", "docs"]),
+        ({"extras": ["api"], "no_dev": True}, ["--extra", "api", "--no-dev"]),
+    ],
+)
+def test_lockfile_api_selection_matches_cli(fixtures, capsys, fake_pypi, kwargs, flags):
+    path = fixtures / "uvselect"
+    results = wheelgap.check_lockfile(path, wheelgap.make_targets("3.13", "linux-x86_64"), offline=True, **kwargs)
+    main([str(path), "-p", "3.13", "-t", "linux-x86_64", "--offline", "--json", *flags])
+    packages = json.loads(capsys.readouterr().out)["packages"]
+    assert {r.name: r.statuses[next(iter(r.statuses))].value for r in results} == {
+        p["name"]: p["results"]["linux-x86_64"] for p in packages
+    }
+    assert not fake_pypi
+
+
+@pytest.mark.parametrize("fixture", ["poetry_groups", "pdm_groups", "poetry_extras"])
+@pytest.mark.parametrize(
+    "kwargs,flags", [({"no_dev": True}, ["--no-dev"]), ({"only_groups": ["dev"]}, ["--only-group", "dev"])]
+)
+def test_other_lockfile_api_selection_matches_cli(request, fixture, kwargs, flags, capsys, fake_pypi):
+    path = request.getfixturevalue(fixture)
+    results = wheelgap.check_lockfile(path, wheelgap.make_targets("3.13", "linux-x86_64"), offline=True, **kwargs)
+    main([str(path), "-p", "3.13", "-t", "linux-x86_64", "--offline", "--json", *flags])
+    assert {r.name for r in results} == {p["name"] for p in json.loads(capsys.readouterr().out)["packages"]}
+    assert not fake_pypi
+
+
+@pytest.mark.parametrize(
+    "kwargs,flags",
+    [
+        ({"extras": ["Fancy_Name"], "only_groups": ["main"]}, ["--extra", "Fancy_Name", "--only-group", "main"]),
+        ({"all_extras": True}, ["--all-extras"]),
+    ],
+)
+def test_poetry_api_extras_match_cli(poetry_extras, capsys, fake_pypi, kwargs, flags):  # noqa: F811
+    results = wheelgap.check_lockfile(
+        poetry_extras, wheelgap.make_targets("3.13", "linux-x86_64"), offline=True, **kwargs
+    )
+    main([str(poetry_extras), "-p", "3.13", "-t", "linux-x86_64", "--offline", "--json", *flags])
+    assert {r.name for r in results} == {p["name"] for p in json.loads(capsys.readouterr().out)["packages"]}
+    assert not fake_pypi
+
+
+@pytest.mark.parametrize("script", [False, True])
+@pytest.mark.parametrize("kwargs", [{"no_dev": True}, {"only_groups": ["test"], "all_extras": True}])
+def test_api_selection_rejects_invalid_project_and_script_selectors(fake_pypi, tmp_path, script, kwargs):
+    path = tmp_path / ("example.py" if script else "pyproject.toml")
+    path.write_text(
+        '# /// script\n# dependencies=["purewheel"]\n# ///\n'
+        if script
+        else '[project]\ndependencies=["purewheel"]\n[dependency-groups]\ntest=[]\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(SourceError, match="doesn't apply|cannot be combined"):
+        wheelgap.check_lockfile(path, [WIN], deps=True, **kwargs)
+    assert not fake_pypi
+
+
+@pytest.mark.parametrize("only", [False, True])
+def test_api_selects_pyproject_groups_and_extras_before_resolving(index, tmp_path, only):  # noqa: F811
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        '[project]\nname="demo"\ndependencies=["plain"]\n[project.optional-dependencies]\n'
+        'crypto=["lib[crypto]"]\n[dependency-groups]\ntest=["a"]\n',
+        encoding="utf-8",
+    )
+    kwargs = {"only_groups": iter(["test"])} if only else {"groups": iter(["test"]), "extras": iter(["crypto"])}
+    names = {r.name for r in wheelgap.check_lockfile(path, [LIN], deps=True, **kwargs)}
+    assert names == ({"a", "c"} if only else {"plain", "lib", "crypt", "a", "c"})
+
+
+def test_api_selects_groups_only_pyproject(index, tmp_path):  # noqa: F811
+    path = tmp_path / "pyproject.toml"
+    path.write_text('[dependency-groups]\ntest=["app"]\n', encoding="utf-8")
+    assert {r.name for r in wheelgap.check_lockfile(path, [LIN], deps=True, only_groups=["test"])} == {
+        "app",
+        "lib",
+        "crypt",
+    }
+
+
+@pytest.mark.parametrize("kwargs", [{"no_dev": True}, {"extras": ["x"]}, {"groups": ["x"]}])
+def test_api_selection_refuses_unsupported_inputs_before_lookup(fake_pypi, tmp_path, kwargs):
+    path = tmp_path / "requirements.txt"
+    path.write_text("purewheel==3.1\n", encoding="utf-8")
+    with pytest.raises(SourceError, match="selection requires"):
+        wheelgap.check_lockfile(path, [WIN], **kwargs)
+    assert not fake_pypi
+
+
+def test_api_selection_ignores_wheelgap_config_and_accepts_empty_selection(fixtures, tmp_path):
+    (tmp_path / "uv.lock").write_bytes((fixtures / "uvselect" / "uv.lock").read_bytes())
+    (tmp_path / "pyproject.toml").write_text('[tool.wheelgap]\ngroups=["missing"]\n', encoding="utf-8")
+    names = {
+        r.name
+        for r in wheelgap.check_lockfile(
+            tmp_path, wheelgap.make_targets("3.13", "linux-x86_64"), offline=True, extras=[]
+        )
+    }
+    assert "devtool" in names and not {"docstool", "gpu", "unused"} & names
+
+
+@pytest.mark.parametrize(
+    "kwargs,message",
+    [
+        ({"groups": ["missing"]}, "unknown groups"),
+        ({"only_groups": ["docs"], "all_extras": True}, "cannot be combined"),
+        ({"groups": ["dev"], "no_dev": True}, "explicit dev"),
+    ],
+)
+def test_api_selection_rejects_invalid_lock_selectors(fixtures, fake_pypi, kwargs, message):
+    with pytest.raises(SourceError, match=message):
+        wheelgap.check_lockfile(fixtures / "uvselect", [WIN], **kwargs)
+    assert not fake_pypi
 
 
 def test_make_targets_takes_cli_style_names():
