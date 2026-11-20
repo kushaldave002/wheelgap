@@ -112,7 +112,7 @@ lock's files if a lookup fails).
   leaves out the project's dependencies unless the group requires the project itself. A groups-only
   `pyproject.toml` is accepted when a group is selected. Scripts have no extras or groups. As on the CLI,
   unsupported selectors, unknown names and incompatible combinations raise `SourceError` before lookups.
-  Iterable arguments may be generators. `[tool.wheelgap]` extras/groups are not read.
+  Iterable arguments may be generators, and a bare string is one name. `[tool.wheelgap]` extras/groups are not read.
 
   ```python
   production = wheelgap.check_lockfile("uv.lock", targets, no_dev=True)

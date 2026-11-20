@@ -512,11 +512,13 @@ def _check_lockfile(
     source: Source = load_file(lockfile, environment)
     if environment is not None and source.kind != "pixi":
         raise SourceError(f"{lockfile}: environment applies to pixi.lock only")
-    only_groups = tuple(only_groups)
+    # A bare string is one name, as for make_targets(), not its letters.
+    only_groups = (only_groups,) if isinstance(only_groups, str) else tuple(only_groups)
     selected = extras is not None or groups is not None or all_extras or no_dev or bool(only_groups)
-    extra_names, group_names = tuple(extras or ()), tuple(groups or ())
+    extra_names = (extras,) if isinstance(extras, str) else tuple(extras or ())
+    group_names = (groups,) if isinstance(groups, str) else tuple(groups or ())
     if source.pyproject_extras is not None:
-        if source.kind == "script" and (groups is not None or only_groups or no_dev or extra_names or all_extras):
+        if source.kind == "script" and (group_names or only_groups or no_dev or extra_names or all_extras):
             raise SourceError("extra/group selection doesn't apply to a script: it has no extras or dependency groups")
         if no_dev:
             raise SourceError("--no-dev doesn't apply to pyproject.toml: no dependency group is selected by default")
@@ -524,9 +526,12 @@ def _check_lockfile(
             if extra_names or all_extras:
                 raise SourceError(f"{source.label}: no [project] optional-dependencies to select from")
             if not (group_names or only_groups):
-                raise SourceError(
-                    f"{lockfile}: no [project] table; select a dependency group with groups or only_groups"
-                )
+                if source.pyproject_groups:
+                    names = ", ".join(sorted(source.pyproject_groups))
+                    raise SourceError(
+                        f"{source.label}: no [project] table; pick one with groups or only_groups: {names}"
+                    )
+                raise SourceError(f"{source.label}: no [project] table and no groups to select")
         if only_groups and (extra_names or all_extras):
             raise SourceError("--only-group cannot be combined with --extra or --all-extras for pyproject.toml inputs")
         select_pyproject_groups(source, group_names, only_groups)
