@@ -75,8 +75,8 @@ uvx --from pip==26.3 python -m pip --isolated --disable-pip-version-check instal
 ```
 
 For Windows, replace the platform array with `--platform win_amd64` and use `win-amd64-pins.txt` / `pip-win.json`.
-For macOS, pass `macosx_<v>_arm64` and `macosx_<v>_universal2` for each `<v>` from `14_0` down to `11_0`, plus
-`macosx_10_<n>_universal2` for `<n>` from 16 down to 9, and use `macos-arm64-pins.txt`.
+For macOS, use `--platform macosx_14_0_arm64` (wheelgap's default `--macos 14.0`; pip widens macOS tags to older
+versions itself) and `macos-arm64-pins.txt`.
 
 Each dry run exited **0** and selected 25 wheels whose package names and versions matched the wheelgap rows.
 `--no-deps` deliberately does not validate consistency of the whole environment or activate project extras/groups.
