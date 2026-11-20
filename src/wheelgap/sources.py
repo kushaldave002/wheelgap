@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import tomllib
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from datetime import datetime
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import ParseResult, unquote, urlparse
@@ -23,6 +26,8 @@ from packaging.utils import (
     parse_wheel_filename,
 )
 from packaging.version import InvalidVersion, Version
+
+from .cutoff import parse_cutoff
 
 if TYPE_CHECKING:
     from .targets import Target
@@ -89,6 +94,7 @@ class Package:
     # PyPI project metadata URLs (project_urls and home_page).
     project_urls: dict[str, str] | None = None
     home_page: str | None = None
+    exclude_newer: datetime | None = field(default=None, repr=False, compare=False)
 
     @property
     def key(self) -> str:
@@ -141,6 +147,12 @@ class Source:
     root_groups: dict[int, str] = field(default_factory=dict)
     # uv.lock only: the project's requires-python. uv keeps only the wheels that can serve it.
     requires_python: str | None = None
+    # Scripts and pyproject.toml: uv's exclude-newer (#521). A file uploaded at or after the cutoff isn't installed;
+    # exclude-newer-package gives the packages it names their own cutoff, or none (uv's `false`: None here).
+    exclude_newer: datetime | None = None
+    exclude_newer_package: dict[str, datetime | None] = field(default_factory=dict)
+    # A uv setting that may set a cutoff here but that wheelgap doesn't read, for a note.
+    exclude_newer_unread: str | None = None
     # Retain uv edge provenance for an explicit installation selection. The existing flattened
     # graph remains untouched, preserving conservative behavior when no selectors are supplied.
     uv_packages: list[dict] | None = None
@@ -217,6 +229,10 @@ class Source:
     deps_paths: dict[Target, dict[int, list[str]]] | None = None
     # --deps: all distinct direct requirements that reach each transitive package, per target.
     deps_direct: dict[Target, dict[int, tuple[str, ...]]] | None = None
+
+    def cutoff_for(self, key: str) -> datetime | None:
+        """The upload cutoff uv applies to this package: its exclude-newer-package entry, else exclude-newer."""
+        return self.exclude_newer_package[key] if key in self.exclude_newer_package else self.exclude_newer
 
 
 def pythons_outside_lock(source: Source, targets: Iterable[Target], *, bounds_only: bool = True) -> list[str]:
@@ -1302,6 +1318,156 @@ def parse_script(path: Path) -> Source:
     )
 
 
+_EXCLUDE_NEWER_KEYS = ("exclude-newer", "exclude-newer-package")
+
+
+def _cutoff_keys(settings: object) -> list[str]:
+    return [key for key in _EXCLUDE_NEWER_KEYS if isinstance(settings, dict) and key in settings]
+
+
+def _settings_beside(pyproject: Path, data: dict) -> tuple[dict, Path]:
+    """The uv settings uv reads for a pyproject.toml's folder: a uv.toml beside it, in place of [tool.uv], else its
+    [tool.uv] table. With the file they came from."""
+    config = pyproject.with_name("uv.toml")
+    if config.is_file():
+        try:
+            return tomllib.loads(config.read_text(encoding="utf-8-sig")), config
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+            raise SourceError(f"{config}: can't be read ({e}); uv reads its settings in place of [tool.uv]") from None
+    return _table(_table(data, "tool"), "uv"), pyproject
+
+
+def _glob_matches(project: Path, root: Path, globs: object, whole_parts: bool) -> bool | None:
+    """Whether a pattern in a [tool.uv.workspace] members list (`whole_parts`: a `*` stays within one folder name)
+    or exclude list matches `project`, as uv's glob crate does. None when none does but one wheelgap can't match the
+    way uv does (with `**` or `..`), or the list isn't a list of strings, might: a guess could be uv's other answer."""
+    if not isinstance(globs, list) or not all(isinstance(glob, str) for glob in globs):
+        return None
+    unsure = False
+    for glob in globs:
+        pattern = Path(os.path.normpath(glob))  # uv normalizes the pattern (`./`, `a/../b`) first too
+        if not pattern.parts or any(part == ".." or "**" in part for part in pattern.parts):
+            unsure = True
+            continue
+        target = project if pattern.is_absolute() else project.relative_to(root)
+        if whole_parts:
+            if len(target.parts) == len(pattern.parts) and all(map(fnmatchcase, target.parts, pattern.parts)):
+                return True
+        elif fnmatchcase(target.as_posix(), pattern.as_posix()):
+            return True
+    return None if unsure else False
+
+
+def _workspace_root(path: Path, data: dict) -> tuple[Path, dict, bool] | None:
+    """The workspace root of a pyproject.toml that's a uv workspace member, whose settings uv reads in place of the
+    member's own (uv loads settings from `workspace.install_path()`) (#521). As uv finds it: the first pyproject.toml
+    in a folder above decides, a member if its [tool.uv.workspace] members include this project and its exclude
+    doesn't; up to the repository root (the first folder with a .git). Returns the root's pyproject.toml, its data,
+    and whether the membership is certain, or None for a project that isn't a member."""
+    uv = _table(_table(data, "tool"), "uv")
+    if not isinstance(data.get("project"), dict) or "workspace" in uv or uv.get("managed") is False:
+        return None  # a workspace root itself, or a file uv doesn't treat as a workspace project
+    project = Path(os.path.normpath(path.absolute())).parent
+    for directory in project.parents:
+        if (root := directory / "pyproject.toml").is_file():
+            try:
+                root_data = tomllib.loads(root.read_text(encoding="utf-8-sig"))
+            except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+                return None  # uv can't find a workspace here either: it stops with an error
+            workspace = _table(_table(root_data, "tool"), "uv").get("workspace")
+            if workspace is None:
+                return None  # a folder of another project, such as its examples: uv ignores it
+            if not isinstance(workspace, dict):
+                return root, root_data, False
+            included = _glob_matches(project, directory, workspace.get("members", []), whole_parts=True)
+            excluded = _glob_matches(project, directory, workspace.get("exclude", []), whole_parts=False)
+            if included is False or excluded is True:
+                return None
+            return root, root_data, bool(included and excluded is False)
+        if (directory / ".git").exists():
+            break
+    return None
+
+
+def _read_exclude_newer(source: Source, data: dict, path: Path, script: bool) -> None:
+    """uv's exclude-newer and exclude-newer-package for this input (#521): from a script's own [tool.uv], or for a
+    pyproject.toml from a uv.toml beside it when there is one (uv then ignores [tool.uv]), else its [tool.uv]. For a
+    workspace member, uv reads the workspace root's settings in the same way and ignores the member's. A cutoff is a
+    timestamp or a date; uv's relative durations are refused, and so is anything else."""
+    workspace = None if script else _workspace_root(path, data)
+    if script:
+        settings, config = _table(_table(data, "tool"), "uv"), path
+    elif workspace is None:
+        settings, config = _settings_beside(path, data)
+    else:
+        root, root_data, certain = workspace
+        settings, config = _settings_beside(root, root_data)
+        # The member's own settings, which uv doesn't read (so one it couldn't read either isn't an error here).
+        own_config, own = _uv_config(path.parent) or (path, {})
+        if not certain:
+            if _cutoff_keys(own) or _cutoff_keys(settings):
+                raise SourceError(
+                    f"{path}: wheelgap can't tell whether this is a member of the workspace at {root} (its "
+                    "[tool.uv.workspace] members or exclude use patterns wheelgap doesn't match as uv does), "
+                    "and uv takes a member's exclude-newer from the workspace root's settings, not its own"
+                )
+            return
+        if keys := _cutoff_keys(own):
+            source.exclude_newer_unread = (
+                f"{own_config} sets {' and '.join(keys)}, which uv ignores in a workspace member: it uses the "
+                f"workspace root's settings ({config}), and so does wheelgap"
+            )
+    where = f"{config}:" if config.name == "uv.toml" else f"{config}: [tool.uv]"
+    if "exclude-newer" in settings:
+        try:
+            source.exclude_newer = parse_cutoff(settings["exclude-newer"])
+        except ValueError as e:
+            raise SourceError(
+                f"{where} exclude-newer must be a date or RFC 3339 timestamp: {e} "
+                "(wheelgap doesn't read uv's relative durations)"
+            ) from None
+    per_package = settings.get("exclude-newer-package", {})
+    if not isinstance(per_package, dict):
+        raise SourceError(f"{where} exclude-newer-package must be a table of package names")
+    for name, value in per_package.items():
+        key = canonicalize_name(name)
+        if key in source.exclude_newer_package:
+            raise SourceError(f"{where} exclude-newer-package names {key!r} twice once normalized")
+        try:
+            source.exclude_newer_package[key] = None if value is False else parse_cutoff(value)
+        except ValueError as e:
+            raise SourceError(
+                f"{where} exclude-newer-package {name} must be a date, an RFC 3339 timestamp or false: {e} "
+                "(wheelgap doesn't read uv's relative durations)"
+            ) from None
+    if workspace is None:  # a workspace root always has settings: uv looks no further up
+        source.exclude_newer_unread = _unread_exclude_newer(path, script)
+
+
+def _unread_exclude_newer(path: Path, script: bool) -> str | None:
+    """A uv.toml or pyproject.toml [tool.uv] in a folder above that uv may take exclude-newer from, which wheelgap
+    doesn't read: for a script, the nearest one from its folder up; for a pyproject.toml outside a workspace, the
+    nearest one above its folder when it has no uv.toml or [tool.uv] of its own (uv reads the nearest settings
+    only). Up to the repository root (the first with a .git)."""
+    folder = path.resolve().parent
+    for directory in (folder, *folder.parents):
+        if (found := _uv_config(directory)) is not None:
+            if not script and directory == folder:
+                return None  # the pyproject.toml's own settings, or a uv.toml beside it: read already
+            config, uv = found
+            if keys := _cutoff_keys(uv):
+                return f"{config} sets {' and '.join(keys)}, " + (
+                    "which uv may apply here too; wheelgap reads only the script's own block"
+                    if script
+                    else "which uv applies here, as this pyproject.toml has no uv settings of its own; wheelgap "
+                    "doesn't read settings from a folder above"
+                )
+            return None  # uv reads the nearest settings only
+        if (directory / ".git").exists():
+            break
+    return None
+
+
 def _builds_a_package(data: dict, path: Path) -> bool:
     """Whether a pyproject.toml with no [project] table still describes a buildable project: a [build-system]
     table, a setup.py or setup.cfg beside it, [tool.flit.metadata], or PDM-legacy [tool.pdm] dependencies."""
@@ -1384,6 +1550,7 @@ def _project_source(data: dict, path: Path, script: bool = False) -> Source:
         pyproject_dynamic_extras="optional-dependencies" in dynamic,
         pypi_only=not (_names_an_index(data) or _nearby_config_names_an_index(path)),
     )
+    _read_exclude_newer(source, data, path, script)
     if isinstance(requires_python := project.get("requires-python"), str):
         source.requires_python = requires_python
     if isinstance(name := project.get("name"), str):
@@ -1522,6 +1689,9 @@ def _add_extras(source: Source, wanted: list[str]) -> None:
                 source.specs.append(line)
             if pkg not in source.packages:  # also in another extra or in dependencies: one row
                 source.packages.append(pkg)
+
+    for pkg in source.packages:  # pinned or not: uv leaves out a pinned release's later files too
+        pkg.exclude_newer = source.cutoff_for(pkg.key)
 
 
 def requirement_to_package(text: str, origin: str) -> Package:
