@@ -46,3 +46,14 @@ def test_range_ignores_timestamps_of_releases_outside_its_constraint():
     assert _newest_matching(
         {"releases": {"1.0": [older], "2.0": [matching]}}, ">=2", "3.13", parse_cutoff("2025-01-01")
     ) == ("2.0", [matching])
+
+
+@pytest.mark.parametrize("value", ["9999-12-31", "0001-01-01T00:00:00+01:00", "2025-01-01T00:00:00.1234567890Z"])
+def test_out_of_range_cutoffs_are_refused_not_a_crash(value):
+    with pytest.raises(ValueError):
+        parse_cutoff(value)
+
+
+def test_cutoff_compares_whole_milliseconds_as_uv_does():
+    files = [{"filename": "same-millisecond.whl", "upload_time_iso_8601": "2025-01-01T00:00:00.000400Z"}]
+    assert before_cutoff(files, parse_cutoff("2025-01-01T00:00:00.000900Z")) == []

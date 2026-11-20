@@ -1,7 +1,6 @@
 import json
 
 from conftest import FAKE_INDEX
-from packaging.requirements import Requirement
 from test_deps import INDEX, LINUX, WIN_AMD, index, release  # noqa: F401
 
 from wheelgap import cache, make_targets, pypi
@@ -50,10 +49,10 @@ def test_cutoff_unpinned_requirement_resolves_separately_for_each_python(fake_py
 
 def test_cutoff_exact_pin_ignores_unrelated_releases_without_upload_times():
     resolver = Resolver(prefetch=False)
-    resolver.exclude_newer = CUTOFF
+    resolver.cutoff = lambda key: CUTOFF
     resolver._projects["dated"] = {
         "releases": {
-            "1.0": [{"filename": "dated-1.0-py3-none-any.whl"}],
+            "1.0": [{"filename": "dated-1.0-py3-none-any.whl", "upload_time_iso_8601": "2024-01-01T00:00:00Z"}],
             "2.0": [{"filename": "dated-2.0-py3-none-any.whl"}],
         }
     }
@@ -61,7 +60,7 @@ def test_cutoff_exact_pin_ignores_unrelated_releases_without_upload_times():
     assert resolver.pick("dated", ["==1.0"], target) == "1.0"
 
 
-def test_cutoff_exact_pin_on_windows_does_not_exempt_linux_range(
+def test_cutoff_applies_to_an_exact_pin_too(
     index,  # noqa: F811
     monkeypatch,
     tmp_path,
@@ -88,11 +87,12 @@ def test_cutoff_exact_pin_on_windows_does_not_exempt_linux_range(
     )
     assert main([str(path), "--deps", "-p", "3.14", "-t", "win-amd64", "-t", "linux-x86_64", "--json"]) == 1
     packages = json.loads(capsys.readouterr().out)["packages"]
-    assert [p["results"]["win-amd64"] for p in packages if p["results"]["win-amd64"] != "n/a"] == ["wheel"]
+    # uv leaves out a pinned release's later files as well: the Windows wheel came after the cutoff.
+    assert [p["results"]["win-amd64"] for p in packages if p["results"]["win-amd64"] != "n/a"] == ["source"]
     assert [p["results"]["linux-x86_64"] for p in packages if p["results"]["linux-x86_64"] != "n/a"] == ["source"]
 
 
-def test_cutoff_abandoned_round_pin_does_not_exempt_a_later_range(index, monkeypatch):  # noqa: F811
+def test_cutoff_filters_an_exact_pins_wheels_in_the_resolver(index, monkeypatch):  # noqa: F811
     monkeypatch.setitem(INDEX, "dated", {"1.0": release(files=(LINUX,))})
     fetch_json = pypi.fetch_json
 
@@ -107,10 +107,7 @@ def test_cutoff_abandoned_round_pin_does_not_exempt_a_later_range(index, monkeyp
 
     monkeypatch.setattr(pypi, "fetch_json", dated_json)
     resolver = Resolver(prefetch=False)
-    resolver.exclude_newer = CUTOFF
+    resolver.cutoff = lambda key: CUTOFF
     target = make_targets("3.14", "linux-x86_64")[0]
-    resolver._round([Requirement("dated==1.0")], target, {})
-    assert resolver._wheels("dated", "1.0", target)
-    # An exact constraint reached only in an abandoned round must not remain an exemption.
-    resolver._round([Requirement("dated>=1")], target, {})
+    assert resolver.pick("dated", ["==1.0"], target) == "1.0"  # its sdist is old enough
     assert resolver._wheels("dated", "1.0", target) == []

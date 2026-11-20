@@ -1135,14 +1135,15 @@ def test_project_deps_respect_exclude_newer(index, monkeypatch, tmp_path, capsys
     assert json.loads(capsys.readouterr().out)["packages"][0]["version"] == "1.0"
 
 
-def test_project_deps_cutoff_does_not_change_an_exact_pin(index, tmp_path, capsys):
+def test_project_deps_cutoff_applies_to_an_exact_pin(index, tmp_path, capsys):
     path = tmp_path / "pyproject.toml"
     path.write_text(
         '[project]\ndependencies = ["app==1.0"]\n[tool.uv]\nexclude-newer = "1900-01-01T00:00:00Z"\n',
         encoding="utf-8",
     )
-    # app is exempt, but its unpinned lib dependency has no upload timestamps in this fake index.
+    # uv filters a pinned release's files too, and this fake index gives them no upload times: unknown, not 1.0.
     assert main([str(path), "--deps", "-p", "3.14", "-t", "win-arm64", "--json"]) == 1
     packages = {p["name"]: p for p in json.loads(capsys.readouterr().out)["packages"]}
-    assert packages["app"]["version"] == "1.0"
-    assert "no valid upload_time_iso_8601" in packages["lib"]["error"]
+    assert list(packages) == ["app"]
+    assert packages["app"]["version"] is None
+    assert "no valid upload_time_iso_8601" in packages["app"]["error"]

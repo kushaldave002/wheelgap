@@ -145,8 +145,12 @@ class Source:
     root_groups: dict[int, str] = field(default_factory=dict)
     # uv.lock only: the project's requires-python. uv keeps only the wheels that can serve it.
     requires_python: str | None = None
+    # Scripts and pyproject.toml: uv's exclude-newer (#521). A file uploaded at or after the cutoff isn't installed;
+    # exclude-newer-package gives the packages it names their own cutoff, or none (uv's `false`: None here).
     exclude_newer: datetime | None = None
-    exclude_newer_package: bool = False
+    exclude_newer_package: dict[str, datetime | None] = field(default_factory=dict)
+    # A uv setting that may set a cutoff here but that wheelgap doesn't read, for a note.
+    exclude_newer_unread: str | None = None
     # Retain uv edge provenance for an explicit installation selection. The existing flattened
     # graph remains untouched, preserving conservative behavior when no selectors are supplied.
     uv_packages: list[dict] | None = None
@@ -223,6 +227,10 @@ class Source:
     deps_paths: dict[Target, dict[int, list[str]]] | None = None
     # --deps: all distinct direct requirements that reach each transitive package, per target.
     deps_direct: dict[Target, dict[int, tuple[str, ...]]] | None = None
+
+    def cutoff_for(self, key: str) -> datetime | None:
+        """The upload cutoff uv applies to this package: its exclude-newer-package entry, else exclude-newer."""
+        return self.exclude_newer_package[key] if key in self.exclude_newer_package else self.exclude_newer
 
 
 def pythons_outside_lock(source: Source, targets: Iterable[Target], *, bounds_only: bool = True) -> list[str]:
@@ -1308,6 +1316,63 @@ def parse_script(path: Path) -> Source:
     )
 
 
+_EXCLUDE_NEWER_KEYS = ("exclude-newer", "exclude-newer-package")
+
+
+def _read_exclude_newer(source: Source, data: dict, path: Path, script: bool) -> None:
+    """uv's exclude-newer and exclude-newer-package for this input (#521): from a script's own [tool.uv], or for a
+    pyproject.toml from a uv.toml beside it when there is one (uv then ignores [tool.uv]), else its [tool.uv]. A
+    cutoff is a timestamp or a date; uv's relative durations are refused, and so is anything else."""
+    settings, where = _table(_table(data, "tool"), "uv"), f"{path}: [tool.uv]"
+    config = path.with_name("uv.toml")
+    if not script and config.is_file():
+        try:
+            settings, where = tomllib.loads(config.read_text(encoding="utf-8-sig")), f"{config}:"
+        except (UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+            raise SourceError(f"{config}: can't be read ({e}); uv reads its settings in place of [tool.uv]") from None
+    if "exclude-newer" in settings:
+        try:
+            source.exclude_newer = parse_cutoff(settings["exclude-newer"])
+        except ValueError as e:
+            raise SourceError(
+                f"{where} exclude-newer must be a date or RFC 3339 timestamp: {e} "
+                "(wheelgap doesn't read uv's relative durations)"
+            ) from None
+    per_package = settings.get("exclude-newer-package", {})
+    if not isinstance(per_package, dict):
+        raise SourceError(f"{where} exclude-newer-package must be a table of package names")
+    for name, value in per_package.items():
+        key = canonicalize_name(name)
+        if key in source.exclude_newer_package:
+            raise SourceError(f"{where} exclude-newer-package names {key!r} twice once normalized")
+        try:
+            source.exclude_newer_package[key] = None if value is False else parse_cutoff(value)
+        except ValueError as e:
+            raise SourceError(
+                f"{where} exclude-newer-package {name} must be a date, an RFC 3339 timestamp or false: {e} "
+                "(wheelgap doesn't read uv's relative durations)"
+            ) from None
+    source.exclude_newer_unread = _unread_exclude_newer(path, script)
+
+
+def _unread_exclude_newer(path: Path, script: bool) -> str | None:
+    """A uv.toml or pyproject.toml [tool.uv] that uv may take exclude-newer from as well, which wheelgap doesn't read:
+    for a script, the nearest one from its folder up; for a pyproject.toml, the nearest one above its folder (a
+    workspace's root, whose settings uv applies to its members). Up to the repository root (the first with a .git)."""
+    folder = path.resolve().parent
+    for directory in (folder, *folder.parents):
+        if (script or directory != folder) and (found := _uv_config(directory)) is not None:
+            config, uv = found
+            if keys := [key for key in _EXCLUDE_NEWER_KEYS if isinstance(uv, dict) and key in uv]:
+                return f"{config} sets {' and '.join(keys)}, which uv may apply here too; wheelgap reads only " + (
+                    "the script's own block" if script else "this pyproject.toml's [tool.uv], or a uv.toml beside it"
+                )
+            return None  # uv reads the nearest settings only
+        if (directory / ".git").exists():
+            break
+    return None
+
+
 def _builds_a_package(data: dict, path: Path) -> bool:
     """Whether a pyproject.toml with no [project] table still describes a buildable project: a [build-system]
     table, a setup.py or setup.cfg beside it, [tool.flit.metadata], or PDM-legacy [tool.pdm] dependencies."""
@@ -1390,13 +1455,7 @@ def _project_source(data: dict, path: Path, script: bool = False) -> Source:
         pyproject_dynamic_extras="optional-dependencies" in dynamic,
         pypi_only=not (_names_an_index(data) or _nearby_config_names_an_index(path)),
     )
-    uv = _table(_table(data, "tool"), "uv")
-    if "exclude-newer" in uv:
-        try:
-            source.exclude_newer = parse_cutoff(uv["exclude-newer"])
-        except ValueError as e:
-            raise SourceError(f"{path}: [tool.uv] exclude-newer must be a date or RFC 3339 timestamp: {e}") from None
-    source.exclude_newer_package = "exclude-newer-package" in uv
+    _read_exclude_newer(source, data, path, script)
     if isinstance(requires_python := project.get("requires-python"), str):
         source.requires_python = requires_python
     if isinstance(name := project.get("name"), str):
@@ -1536,9 +1595,8 @@ def _add_extras(source: Source, wanted: list[str]) -> None:
             if pkg not in source.packages:  # also in another extra or in dependencies: one row
                 source.packages.append(pkg)
 
-    for pkg in source.packages:
-        if pkg.version is None:
-            pkg.exclude_newer = source.exclude_newer
+    for pkg in source.packages:  # pinned or not: uv leaves out a pinned release's later files too
+        pkg.exclude_newer = source.cutoff_for(pkg.key)
 
 
 def requirement_to_package(text: str, origin: str) -> Package:

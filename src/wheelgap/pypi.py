@@ -44,7 +44,7 @@ from packaging.version import InvalidVersion, Version
 
 from . import __version__, cache
 from ._download_pool import DownloadPool
-from .cutoff import UploadTimeError, before_cutoff
+from .cutoff import UploadTimeError, before_cutoff, describe
 from .sources import Package, SourceError
 
 DEFAULT_INDEX = "https://pypi.org/pypi"
@@ -849,7 +849,7 @@ def fill_simple(
 ) -> Package:
     pkg.resolutions = {}  # a refresh must not retain answers from the previous response
     if pkg.exclude_newer is not None:
-        pkg.error = "exclude-newer needs upload timestamps from the JSON index; --index-url is not supported"
+        pkg.error = "exclude-newer needs upload times, which wheelgap reads only from PyPI's JSON API, not --index-url"
         return pkg
     try:
         data = fetch_simple(f"{base}/{quote(pkg.key)}/", auth)
@@ -1083,14 +1083,25 @@ def _fill_json_data(pkg: Package, data: dict, python: str | None, base: str) -> 
             # A range (numpy>=1.26,<2): check the release an installer would pick, not the latest.
             found = _newest_matching(data, pkg.spec or "", python, pkg.exclude_newer)
             if found is None:
-                pkg.error = f"no release matches {pkg.spec}" + (f" for Python {python}" if python else "")
+                pkg.error = (
+                    (f"no release matches {pkg.spec}" if pkg.spec else "no release")
+                    + (f" uploaded before exclude-newer ({describe(pkg.exclude_newer)})" if pkg.exclude_newer else "")
+                    + (f" for Python {python}" if python else "")
+                )
                 return pkg
             pkg.version, urls = found
             pkg.version_from_index = True
             names = [u["filename"] for u in urls if not u.get("yanked")]
             pkg.files = names
         elif pinned:
-            urls = before_cutoff(_files(data.get("urls", [])), pkg.exclude_newer)
+            listed = _files(data.get("urls", []))
+            urls = before_cutoff(listed, pkg.exclude_newer)
+            if pkg.exclude_newer is not None and listed and not urls:
+                pkg.error = (
+                    f"{pkg.version} was uploaded after exclude-newer ({describe(pkg.exclude_newer)}), "
+                    "so uv won't install it"
+                )
+                return pkg
             live = [u for u in urls if _supports_python(u, python)]
             rejected = [u for u in urls if not _supports_python(u, python)]
             pkg.files = [u["filename"] for u in live]
