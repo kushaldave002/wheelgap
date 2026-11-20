@@ -85,10 +85,12 @@ their own build/interpreter checks; a pure-Python sdist need not require a C com
 - **`orjson` 3.12.0** does publish a CPython 3.15 x86_64 wheel, tagged `manylinux_2_39`. With `--distro ubuntu-24.04`
   (glibc 2.39) wheelgap reports it as a wheel, so on a glibc 2.39 runner it isn't a gap; this study doesn't measure which
   runner `CI_LINUX_RUNNER` names.
-- **`numpy` 2.2.6 and `onnxruntime` 1.30.0** reach the lock only through `stackone-defender[onnx]`, which the
-  `pydantic-ai-harness` extra `prompt-injection-defender-ml` requests with the marker `python_full_version < '3.15'`
-  ([uv.lock line 7489](https://github.com/pydantic/pydantic-ai/blob/4df9988f5e54fac97223c0ad989400d04ca3b766/uv.lock#L7489)),
-  and the lock's resolution markers for numpy 2.2.6 cover Python 3.11 to 3.13 only (on 3.15 the lock uses numpy 2.5.2).
+- **`onnxruntime` 1.30.0** (and its dependency `flatbuffers`) reaches the lock only through `stackone-defender[onnx]`,
+  which the `pydantic-ai-harness` extra `prompt-injection-defender-ml` requests with the marker
+  `python_full_version < '3.15'`
+  ([uv.lock line 7489](https://github.com/pydantic/pydantic-ai/blob/4df9988f5e54fac97223c0ad989400d04ca3b766/uv.lock#L7489)).
+  **`numpy` 2.2.6** is also required by `pandas`, `gradio`, `datasets` and `pixeltable`, but the lock's resolution
+  markers limit it to Python 3.11 to 3.13; on 3.14 and 3.15 the lock uses numpy 2.5.2.
   Following the lock's dependency markers from every workspace member, with all extras and groups, on CPython 3.15
   Linux reaches **367** registry packages: the report's 370 rows less these two and `flatbuffers` 25.12.19, a dependency
   of `onnxruntime` that has a wheel. wheelgap 0.13.0's whole-lock scan still lists the three, so these two gaps are not
