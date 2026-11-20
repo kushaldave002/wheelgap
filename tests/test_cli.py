@@ -4491,3 +4491,324 @@ def test_script_deps_refuses_private_index(capsys, fake_pypi, tmp_path):
     assert "the script configures an installer index or source; --deps uses only PyPI" in err
     assert "--deps uses only PyPI, so check its lock (uv lock --script) instead" in err
     assert fake_pypi == []
+
+
+@pytest.mark.parametrize("script", [False, True])
+@pytest.mark.parametrize("cutoff", ["2025-01-01", "2025-01-02T00:00:00Z"])
+def test_project_exclude_newer_limits_range_resolution(fake_pypi, capsys, tmp_path, monkeypatch, script, cutoff):
+    from conftest import FAKE_INDEX
+
+    monkeypatch.setitem(
+        FAKE_INDEX,
+        "dated",
+        {
+            "1.0": [{"filename": "dated-1.0-py3-none-any.whl", "upload_time_iso_8601": "2024-01-01T00:00:00Z"}],
+            "2.0": [{"filename": "dated-2.0.tar.gz", "upload_time_iso_8601": "2025-02-01T00:00:00Z"}],
+        },
+    )
+    if script:
+        path = tmp_path / "example.py"
+        path.write_text(
+            f'# /// script\n# dependencies = ["dated>=1"]\n# [tool.uv]\n# exclude-newer = "{cutoff}"\n# ///\n',
+            encoding="utf-8",
+        )
+    else:
+        path = tmp_path / "pyproject.toml"
+        path.write_text(
+            f'[project]\ndependencies = ["dated>=1"]\n[tool.uv]\nexclude-newer = "{cutoff}"\n', encoding="utf-8"
+        )
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64", "--json")
+    assert code == 0
+    assert json.loads(out)["packages"][0]["version"] == "1.0"
+
+
+@pytest.mark.parametrize("value", ['"1 week"', '"2025-02-30"', '"2025-01-01T00:00:00"', "123"])
+def test_project_exclude_newer_rejects_invalid_cutoffs(fake_pypi, capsys, tmp_path, value):
+    path = tmp_path / "pyproject.toml"
+    path.write_text(f'[project]\ndependencies = ["nowheels"]\n[tool.uv]\nexclude-newer = {value}\n', encoding="utf-8")
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64")
+    assert code == 2
+    assert "exclude-newer" in err
+    assert fake_pypi == []
+
+
+DATED = {
+    "1.0": [
+        {"filename": "dated-1.0.tar.gz", "upload_time_iso_8601": "2024-01-01T00:00:00Z"},
+        # A wheel added to 1.0 after the cutoff, as projects do for a new Python: uv leaves it out.
+        {"filename": "dated-1.0-cp313-cp313-win_arm64.whl", "upload_time_iso_8601": "2025-02-01T00:00:00Z"},
+    ],
+    "2.0": [{"filename": "dated-2.0-py3-none-any.whl", "upload_time_iso_8601": "2025-02-01T00:00:00Z"}],
+}
+
+
+@pytest.mark.parametrize(
+    "requirement, result, error",
+    [
+        ("dated", "source", None),
+        ("dated==1.0", "source", None),  # an exact pin too: uv filters every file, pinned or not
+        ("dated==2.0", "unknown", "2.0 was uploaded after exclude-newer (2025-01-01T00:00:00Z), so uv won't install"),
+    ],
+)
+def test_project_exclude_newer_applies_to_exact_pins(
+    fake_pypi, capsys, tmp_path, monkeypatch, requirement, result, error
+):
+    from conftest import FAKE_INDEX
+
+    monkeypatch.setitem(FAKE_INDEX, "dated", DATED)
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        f'[project]\ndependencies = ["{requirement}"]\n[tool.uv]\nexclude-newer = "2025-01-01T00:00:00Z"\n',
+        encoding="utf-8",
+    )
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64", "--json")
+    assert code == 1
+    package = json.loads(out)["packages"][0]
+    assert package["results"] == {"win-arm64": result}
+    assert (error in package["error"]) if error else not package.get("error")
+
+
+@pytest.mark.parametrize(
+    "settings, expected",
+    [
+        ('exclude-newer = "2025-01-01T00:00:00Z"\nexclude-newer-package = { dated = false }', "2.0"),
+        ('exclude-newer = "2025-01-01T00:00:00Z"\nexclude-newer-package = { Dated = "2025-03-01" }', "2.0"),
+        ('exclude-newer = "2025-03-01"\nexclude-newer-package = { dated = "2025-01-01T00:00:00Z" }', "1.0"),
+        ('exclude-newer-package = { dated = "2025-01-01T00:00:00Z" }', "1.0"),
+        ('exclude-newer-package = { other = "2025-01-01T00:00:00Z" }', "2.0"),
+    ],
+)
+def test_project_exclude_newer_package_overrides_the_cutoff(
+    fake_pypi, capsys, tmp_path, monkeypatch, settings, expected
+):
+    from conftest import FAKE_INDEX
+
+    monkeypatch.setitem(FAKE_INDEX, "dated", DATED)
+    monkeypatch.delenv("UV_EXCLUDE_NEWER", raising=False)
+    path = tmp_path / "pyproject.toml"
+    path.write_text(f'[project]\ndependencies = ["dated"]\n[tool.uv]\n{settings}\n', encoding="utf-8")
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64", "--json")
+    assert json.loads(out)["packages"][0]["version"] == expected
+    # Only the --deps note mentions the cutoff: nothing about the settings themselves.
+    assert "the newest matching release uploaded before exclude-newer" in err
+    assert err.count("exclude-newer") == 1
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        'exclude-newer-package = { dated = "7 days" }',
+        "exclude-newer-package = { dated = true }",
+        'exclude-newer-package = "2025-01-01"',
+        'exclude-newer-package = { dated = "2025-01-01", Dated = "2025-01-02" }',
+    ],
+)
+def test_project_exclude_newer_package_rejects_what_it_cannot_read(fake_pypi, capsys, tmp_path, settings):
+    path = tmp_path / "pyproject.toml"
+    path.write_text(f'[project]\ndependencies = ["dated"]\n[tool.uv]\n{settings}\n', encoding="utf-8")
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64")
+    assert code == 2
+    assert "exclude-newer-package" in err
+    assert fake_pypi == []
+
+
+def test_project_exclude_newer_is_read_from_a_uv_toml_beside_it(fake_pypi, capsys, tmp_path, monkeypatch):
+    from conftest import FAKE_INDEX
+
+    monkeypatch.setitem(FAKE_INDEX, "dated", DATED)
+    # uv reads a uv.toml beside pyproject.toml in place of its [tool.uv].
+    (tmp_path / "uv.toml").write_text('exclude-newer = "2025-01-01T00:00:00Z"\n', encoding="utf-8")
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        '[project]\ndependencies = ["dated"]\n[tool.uv]\nexclude-newer = "2025-03-01T00:00:00Z"\n', encoding="utf-8"
+    )
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64", "--json")
+    assert json.loads(out)["packages"][0]["version"] == "1.0"
+
+
+@pytest.mark.parametrize("script", [False, True])
+def test_exclude_newer_wheelgap_does_not_read_is_a_note(fake_pypi, capsys, tmp_path, monkeypatch, script):
+    (tmp_path / "uv.toml").write_text('exclude-newer = "2025-01-01T00:00:00Z"\n', encoding="utf-8")
+    member = tmp_path / "member"
+    member.mkdir()
+    if script:
+        path = member / "example.py"
+        path.write_text('# /// script\n# dependencies = ["purewheel"]\n# ///\n', encoding="utf-8")
+    else:
+        path = member / "pyproject.toml"
+        path.write_text('[project]\ndependencies = ["purewheel"]\n', encoding="utf-8")
+    monkeypatch.setenv("UV_EXCLUDE_NEWER", "2025-01-01")
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64", "-q")
+    assert code == 0
+    applies = (
+        "which uv may apply here too; wheelgap reads only the script's own block"
+        if script
+        else "which uv applies here, as this pyproject.toml has no uv settings of its own"
+    )
+    assert f"{(tmp_path / 'uv.toml').resolve()} sets exclude-newer, {applies}" in err
+    assert "UV_EXCLUDE_NEWER is set" in err
+
+
+def test_project_with_own_uv_settings_gets_no_note_about_a_folder_above(fake_pypi, capsys, tmp_path, monkeypatch):
+    # uv reads the nearest settings only: a project with a [tool.uv] of its own never takes the folder above's.
+    monkeypatch.delenv("UV_EXCLUDE_NEWER", raising=False)
+    (tmp_path / "uv.toml").write_text('exclude-newer = "2025-01-01T00:00:00Z"\n', encoding="utf-8")
+    (tmp_path / "app").mkdir()
+    path = tmp_path / "app" / "pyproject.toml"
+    path.write_text('[project]\ndependencies = ["purewheel"]\n[tool.uv]\npackage = false\n', encoding="utf-8")
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64", "-q")
+    assert code == 0
+    assert "exclude-newer" not in err
+
+
+def test_project_uv_toml_beside_it_that_cannot_be_read_is_an_error(fake_pypi, capsys, tmp_path, monkeypatch):
+    (tmp_path / "uv.toml").write_text("", encoding="utf-8")
+    path = tmp_path / "pyproject.toml"
+    path.write_text('[project]\ndependencies = ["purewheel"]\n', encoding="utf-8")
+    read_text = Path.read_text
+
+    def unreadable(self, *args, **kwargs):
+        if self.name == "uv.toml":
+            raise PermissionError(13, "Permission denied")
+        return read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64")
+    assert code == 2
+    assert f"{tmp_path / 'uv.toml'}: can't be read" in err
+    assert fake_pypi == []
+
+
+WORKSPACE_ROOT = '[project]\nname = "root"\n[tool.uv.workspace]\nmembers = ["packages/*"]\n'
+
+
+def _workspace_member(tmp_path, member_text, root_text=WORKSPACE_ROOT, folder="packages/app"):
+    (tmp_path / "pyproject.toml").write_text(root_text, encoding="utf-8")
+    member = tmp_path / folder
+    member.mkdir(parents=True)
+    path = member / "pyproject.toml"
+    path.write_text('[project]\nname = "app"\ndependencies = ["dated"]\n' + member_text, encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("beside", [False, True])
+def test_workspace_member_exclude_newer_is_ignored_as_uv_does(fake_pypi, capsys, tmp_path, monkeypatch, beside):
+    # uv loads a workspace member's settings from the workspace root alone (FilesystemOptions::find on the
+    # workspace's install path), so the member's own cutoff, in [tool.uv] or a uv.toml beside it, isn't applied.
+    from conftest import FAKE_INDEX
+
+    monkeypatch.setitem(FAKE_INDEX, "dated", DATED)
+    monkeypatch.delenv("UV_EXCLUDE_NEWER", raising=False)
+    cutoff = 'exclude-newer = "2025-01-01T00:00:00Z"\n'
+    path = _workspace_member(tmp_path, "" if beside else "[tool.uv]\n" + cutoff)
+    if beside:
+        (path.parent / "uv.toml").write_text(cutoff, encoding="utf-8")
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64", "--json")
+    assert json.loads(out)["packages"][0]["version"] == "2.0"
+    config = path.parent / "uv.toml" if beside else path
+    assert (
+        f"{config} sets exclude-newer, which uv ignores in a workspace member: it uses the workspace root's "
+        f"settings ({tmp_path / 'pyproject.toml'}), and so does wheelgap"
+    ) in err
+    assert "the newest matching release uploaded before" not in err
+
+
+@pytest.mark.parametrize("root_uv_toml", [False, True])
+@pytest.mark.parametrize("member_text", ["", '[tool.uv]\nexclude-newer = "2025-03-01T00:00:00Z"\n'])
+def test_workspace_member_takes_exclude_newer_from_the_root(
+    fake_pypi, capsys, tmp_path, monkeypatch, root_uv_toml, member_text
+):
+    from conftest import FAKE_INDEX
+
+    monkeypatch.setitem(FAKE_INDEX, "dated", DATED)
+    monkeypatch.delenv("UV_EXCLUDE_NEWER", raising=False)
+    # The root's uv.toml is read in place of its [tool.uv], whose later cutoff would let 2.0 in.
+    root_cutoff = "2025-03-01T00:00:00Z" if root_uv_toml else "2025-01-01T00:00:00Z"
+    root_text = (
+        f'[project]\nname = "root"\n[tool.uv]\nexclude-newer = "{root_cutoff}"\n'
+        '[tool.uv.workspace]\nmembers = ["packages/*"]\n'
+    )
+    path = _workspace_member(tmp_path, member_text, root_text)
+    if root_uv_toml:
+        (tmp_path / "uv.toml").write_text('exclude-newer = "2025-01-01T00:00:00Z"\n', encoding="utf-8")
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64", "--json")
+    assert json.loads(out)["packages"][0]["version"] == "1.0"
+    assert ("which uv ignores in a workspace member" in err) == bool(member_text)
+    assert "which uv applies here" not in err and "may apply" not in err
+
+
+@pytest.mark.parametrize(
+    "root_text, folder",
+    [
+        (WORKSPACE_ROOT, "examples/demo"),  # not in members
+        (WORKSPACE_ROOT, "packages/app/nested"),  # `*` stays within one folder name
+        (WORKSPACE_ROOT + 'exclude = ["packages/app"]\n', "packages/app"),
+        ('[project]\nname = "outer"\n[tool.uv]\nexclude-newer = "2025-03-01T00:00:00Z"\n', "packages/app"),
+    ],
+)
+def test_project_outside_a_workspace_keeps_its_own_exclude_newer(
+    fake_pypi, capsys, tmp_path, monkeypatch, root_text, folder
+):
+    from conftest import FAKE_INDEX
+
+    monkeypatch.setitem(FAKE_INDEX, "dated", DATED)
+    monkeypatch.delenv("UV_EXCLUDE_NEWER", raising=False)
+    path = _workspace_member(tmp_path, '[tool.uv]\nexclude-newer = "2025-01-01T00:00:00Z"\n', root_text, folder)
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64", "--json")
+    assert json.loads(out)["packages"][0]["version"] == "1.0"
+    assert "workspace" not in err and "folder above" not in err
+
+
+@pytest.mark.parametrize("members", ['["packages/**"]', '["../*/packages/*"]', '"packages/*"'])
+def test_workspace_membership_wheelgap_cannot_match_is_refused_with_a_cutoff(
+    fake_pypi, capsys, tmp_path, monkeypatch, members
+):
+    from conftest import FAKE_INDEX
+
+    monkeypatch.setitem(FAKE_INDEX, "dated", DATED)
+    monkeypatch.delenv("UV_EXCLUDE_NEWER", raising=False)
+    root_text = f'[project]\nname = "root"\n[tool.uv.workspace]\nmembers = {members}\n'
+    path = _workspace_member(tmp_path, '[tool.uv]\nexclude-newer = "2025-01-01T00:00:00Z"\n', root_text)
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64")
+    assert code == 2
+    root = tmp_path / "pyproject.toml"
+    assert f"{path}: wheelgap can't tell whether this is a member of the workspace at {root}" in err
+    assert fake_pypi == []
+    # With no cutoff at the member or the root, membership doesn't change the answer.
+    path.write_text('[project]\nname = "app"\ndependencies = ["dated"]\n', encoding="utf-8")
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64", "--json")
+    assert json.loads(out)["packages"][0]["version"] == "2.0"
+
+
+def test_project_exclude_newer_refuses_unknown_upload_time(fake_pypi, capsys, tmp_path):
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        '[project]\ndependencies = ["ranged>=1"]\n[tool.uv]\nexclude-newer = "2025-01-01"\n', encoding="utf-8"
+    )
+    code, out, err = run(capsys, str(path), "-p", "3.13", "-t", "win-arm64", "--json")
+    assert code == 1
+    package = json.loads(out)["packages"][0]
+    assert package["results"] == {"win-arm64": "unknown"}
+    assert "no valid upload_time_iso_8601" in package["error"]
+
+
+def test_project_exclude_newer_applies_to_selected_extra(fake_pypi, capsys, tmp_path, monkeypatch):
+    from conftest import FAKE_INDEX
+
+    monkeypatch.setitem(
+        FAKE_INDEX,
+        "dated",
+        {
+            "1.0": [{"filename": "dated-1.0-py3-none-any.whl", "upload_time_iso_8601": "2024-01-01T00:00:00Z"}],
+            "2.0": [{"filename": "dated-2.0.tar.gz", "upload_time_iso_8601": "2025-02-01T00:00:00Z"}],
+        },
+    )
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        '[project]\ndependencies = ["dated>=1"]\n[project.optional-dependencies]\ntest = ["dated>=1"]\n'
+        '[tool.uv]\nexclude-newer = "2025-01-01T00:00:00Z"\n',
+        encoding="utf-8",
+    )
+    code, out, err = run(capsys, str(path), "--extra", "test", "-p", "3.13", "-t", "win-arm64", "--json")
+    assert code == 0
+    assert [(p["name"], p["version"]) for p in json.loads(out)["packages"]] == [("dated", "1.0")]

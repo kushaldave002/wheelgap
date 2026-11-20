@@ -25,6 +25,7 @@ from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass, field
+from datetime import datetime
 from urllib.parse import quote
 
 from packaging.requirements import InvalidRequirement, Requirement
@@ -35,6 +36,7 @@ from packaging.version import InvalidVersion, Version
 from . import cache, pypi
 from ._download_pool import DownloadPool
 from .check import SDIST_SUFFIXES, marker_holds, marker_value, rejection
+from .cutoff import describe
 from .sources import Package, Source, SourceError
 from .targets import Target
 
@@ -77,12 +79,18 @@ class Resolver:
         # resolve_deps for the source being resolved: pip picks releases under it, so pick() does too.
         self.policy: Callable[[str], tuple[bool, bool]] | None = None
         self._metadata: dict[str, list[str] | Exception] = {}  # a wheel's .metadata URL -> its Requires-Dist
+        # The source's upload cutoff per package (Source.cutoff_for, #521), also set by resolve_deps: uv leaves out
+        # every file uploaded at or after it, an exact pin's too.
+        self.cutoff: Callable[[str], datetime | None] | None = None
         self.prefetch = prefetch
         self._pool: DownloadPool | None = None
         self._project_jobs: dict[str, Future] = {}
         self._metadata_jobs: dict[str, Future] = {}
         self._release_jobs: dict[tuple[str, str], Future] = {}
         self._planned: set[tuple[str, tuple[str, ...], Target]] = set()
+
+    def _cutoff(self, key: str) -> datetime | None:
+        return self.cutoff(key) if self.cutoff else None
 
     def _project(self, key: str) -> dict:
         if key not in self._projects:
@@ -140,6 +148,7 @@ class Resolver:
     def _wheels(self, key: str, version: str, target: Target) -> list[dict]:
         """The wheels whose metadata determines this release's dependencies on the target."""
         files = pypi._files(self._project(key)["releases"].get(version, []))
+        files = pypi.before_cutoff(files, self._cutoff(key))
         files = [e for e in files if not e.get("yanked")] or files  # every file of a yanked release is yanked
         wheels = [e for e in files if e["filename"].endswith(".whl") and isinstance(e.get("url"), str)]
         own = [e for e in wheels if rejection(e["filename"], target) is None]
@@ -270,6 +279,7 @@ class Resolver:
         python = f"{target.major}.{target.minor}"
         releases = self._project(key)["releases"]
         exact = {s.version for spec in specs for s in SpecifierSet(spec) if s.operator in ("==", "===")}
+        combined = SpecifierSet(",".join(s for s in specs if s))
         usable: dict[Version, str] = {}
         installable: dict[Version, str] = {}
         for text, entries in releases.items():
@@ -278,7 +288,10 @@ class Resolver:
                 files = pypi._files(entries)
             except (InvalidVersion, ValueError):
                 continue
+            if not combined.contains(version, prereleases=True):
+                continue
             pinned = text in exact or str(version) in exact
+            files = pypi.before_cutoff(files, self._cutoff(key))
             # pip installs only wheels and sdists: not an .egg, .exe or .msi.
             live = [
                 e
@@ -296,7 +309,6 @@ class Resolver:
                 for e in live
             ):
                 installable[version] = text
-        combined = SpecifierSet(",".join(s for s in specs if s))
         chosen = max(combined.filter(installable), default=None) or max(combined.filter(usable), default=None)
         return usable[chosen] if chosen is not None else None
 
@@ -343,6 +355,8 @@ class Resolver:
                             "(uv lock, or pip-compile)"
                         )
                     shown = ", ".join(s for s in specs if s) or "any version"
+                    if (cutoff := self._cutoff(key)) is not None:
+                        shown += f" uploaded before exclude-newer ({describe(cutoff)})"
                     tree.errors[key] = f"no release matches {shown} for Python {python}"
                     tree.paths[key] = [*path, self.names.get(key, req.name)]
                     continue
@@ -517,6 +531,7 @@ def _direct_roots(
 def resolve_deps(source: Source, targets: list[Target], resolver: Resolver | None = None) -> None:
     """Replace the source's packages with what its requirements install on each target."""
     resolver = resolver or Resolver()
+    resolver.cutoff = source.cutoff_for
     resolver.policy = source.format_control.policy if source.requirements and source.format_control else None
     roots = [Requirement(text) for text in source.specs]
     kept = [p for p in source.packages if p.skip]  # a name @ URL: nothing to look up, as without --deps
@@ -554,7 +569,15 @@ def resolve_deps(source: Source, targets: list[Target], resolver: Resolver | Non
             if ident not in index:
                 name = resolver.names.get(key, path[-1])
                 index[ident] = len(packages)
-                packages.append(Package(name, version, error=error if version is None else None, origin="--deps"))
+                packages.append(
+                    Package(
+                        name,
+                        version,
+                        error=error if version is None else None,
+                        origin="--deps",
+                        exclude_newer=source.cutoff_for(key),
+                    )
+                )
             i = index[ident]
             if version is not None and error is not None:
                 packages[i].error = error  # its dependencies couldn't be read: unknown, not a clean bill

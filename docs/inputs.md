@@ -366,6 +366,8 @@ kept where wheelgap doesn't read them (check a lockfile instead).
 
 `check_lockfile()` and `wheelgap diff` don't read `pyproject.toml` as an input.
 
+uv's `exclude-newer` upload cutoff is applied: see [Resolution upload cutoffs](#resolution-upload-cutoffs).
+
 ## Python scripts
 
 A single-file script can declare what it needs in a `# /// script` block
@@ -403,6 +405,36 @@ lines to add to the block for `uv run`. To check what the script installs, pass 
 `check_lockfile()` and `wheelgap diff` don't read a script.
 
 A `.py` argument that isn't an existing file, such as `discord.py`, is still a [package name](#package-names).
+
+The block's `[tool.uv]` can also set an [upload cutoff](#resolution-upload-cutoffs).
+
+## Resolution upload cutoffs
+
+For `pyproject.toml` inputs and PEP 723 scripts, wheelgap applies uv's `exclude-newer` as uv does: a file uploaded
+at or after the cutoff is left out, so a release is checked with only its earlier files, and a release with none of
+them is passed over. That holds for ranges, unpinned requirements and exact `==` pins alike, with and without
+`--deps`: a wheel added to a pinned release after the cutoff isn't counted, and a pinned release uploaded after it is
+unknown, since uv won't install it. `exclude-newer-package` gives each package it names its own cutoff, or none with
+`false`.
+
+A cutoff is an RFC 3339 timestamp with an explicit offset (for example `"2025-01-01T00:00:00Z"`), or a `"YYYY-MM-DD"`
+date, which includes that whole day in the local time zone, as uv does. uv's relative durations (`"7 days"`, `"P7D"`)
+and any other value are input errors: the cutoff a duration gives moves with the clock.
+
+The settings are read from the script's own block, or for a `pyproject.toml` from its `[tool.uv]` table, or from a
+`uv.toml` beside it, which uv reads instead. For a uv workspace member, uv uses the workspace root's settings (its
+`uv.toml`, else its `[tool.uv]`) and ignores the member's own, and so does wheelgap; it notes a cutoff the member sets
+that uv ignores. Membership is read from the root's `[tool.uv.workspace]` `members` and `exclude`: if they use a
+pattern wheelgap doesn't match as uv does (`**` or `..`) and a cutoff is set at the member or the root, the file is
+refused rather than checked under a guess. For a project outside a workspace with no `[tool.uv]` or `uv.toml` of its
+own, uv uses the settings in the nearest folder above that has them; wheelgap doesn't read those, and for any input it
+doesn't read user settings, `UV_EXCLUDE_NEWER` or uv's command-line options. It prints a note when a folder above or
+`UV_EXCLUDE_NEWER` sets a cutoff. Lockfiles (`uv.lock`, `script.py.lock`) already record the files uv resolved, so no cutoff is applied to
+them. For requirements files, `uv pip` applies the cutoff from `[tool.uv]` or a `uv.toml`, but wheelgap doesn't (and
+doesn't read `[tool.uv.pip]` `exclude-newer` either): their packages are checked at the newest matching release.
+
+A file without a valid PyPI `upload_time_iso_8601` makes its package unknown rather than being assumed old enough.
+wheelgap reads upload times only from PyPI's JSON API, so under `--index-url` a package with a cutoff is unknown.
 
 ## Package names
 
