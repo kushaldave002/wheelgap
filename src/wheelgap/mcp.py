@@ -249,6 +249,11 @@ TOOLS: list[dict[str, Any]] = [
             "report the packages without a wheel on some target. Environment markers, .python-version and the "
             "project's [tool.wheelgap] settings (targets, python, glibc, ignore, offline, index-url, ...) apply; "
             "arguments given here override them, except that offline = true in the project can't be turned off. "
+            "A uv.lock, poetry.lock or pdm.lock is checked for every extra and dependency group unless [tool.wheelgap] "
+            "extras or groups select some, so it may report gaps the deployment never installs: match the deployment "
+            "with extras, all_extras, groups, only_groups and no_dev (--extra, --all-extras, --group, --only-group, "
+            "--no-dev), e.g. no_dev: true for a production install. A pyproject.toml's PEP 735 groups are checked "
+            "only when groups or only_groups name them. "
             "Notes and errors name command-line flags (--offline is the offline argument here, --deps the "
             "dependencies argument). "
             "Packages from git, paths, URLs or private indexes are listed under "
@@ -291,6 +296,35 @@ TOOLS: list[dict[str, Any]] = [
                 "offline": {
                     "type": "boolean",
                     "description": "Use only the files recorded in the lockfile; never contact the index.",
+                },
+                "extras": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Extras to install, as --extra NAME (uv.lock, poetry.lock, pyproject.toml). "
+                    "Replaces [tool.wheelgap] extras; an empty array is the same as leaving it out.",
+                },
+                "all_extras": {
+                    "type": "boolean",
+                    "description": "Install every extra, as --all-extras (uv.lock, poetry.lock, pyproject.toml). "
+                    "Default: false.",
+                },
+                "groups": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Dependency groups to include, as --group NAME (uv.lock, Poetry 2.x poetry.lock, "
+                    "pdm.lock, pyproject.toml [dependency-groups]). Replaces [tool.wheelgap] groups; an empty array "
+                    "is the same as leaving it out.",
+                },
+                "only_groups": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Check only these dependency groups, as --only-group NAME: the project's own "
+                    "dependencies are left out unless a group names them.",
+                },
+                "no_dev": {
+                    "type": "boolean",
+                    "description": "Leave out the dev group, as --no-dev (uv.lock, Poetry 2.x poetry.lock, pdm.lock; "
+                    "refused for pyproject.toml). Default: false.",
                 },
                 "dependencies": {
                     "type": "boolean",
@@ -527,13 +561,17 @@ def _string(args: dict[str, Any], key: str, *, required: bool = False) -> str | 
     return value
 
 
-def _platforms(args: dict[str, Any]) -> list[str]:
-    platforms = args.get("targets")
-    if platforms is None:
+def _strings(args: dict[str, Any], key: str) -> list[str]:
+    values = args.get(key)
+    if values is None:
         return []
-    if not isinstance(platforms, list) or not all(isinstance(p, str) for p in platforms):
-        raise ToolError("'targets' must be an array of strings")
-    return [p.strip() for p in platforms if p.strip()]
+    if not isinstance(values, list) or not all(isinstance(p, str) for p in values):
+        raise ToolError(f"'{key}' must be an array of strings")
+    return [p.strip() for p in values if p.strip()]
+
+
+def _platforms(args: dict[str, Any]) -> list[str]:
+    return _strings(args, "targets")
 
 
 def _pythons(args: dict[str, Any]) -> list[str]:
@@ -718,6 +756,11 @@ def _check_lockfile(args: dict[str, Any]) -> dict[str, Any]:
     path = _existing(raw)
     # --name=value forms, and -- before the path, so no value can be read as another option.
     argv = ["--json"]
+    for key, flag in (("extras", "extra"), ("groups", "group"), ("only_groups", "only-group")):
+        argv += [f"--{flag}={name}" for name in _strings(args, key)]
+    for key, flag in (("all_extras", "all-extras"), ("no_dev", "no-dev")):
+        if _flag(args, key):
+            argv.append(f"--{flag}")
     if environment is not None:
         argv.append(f"--environment={environment}")
     argv += [f"--python={p}" for p in _pythons(args)]
@@ -1550,7 +1593,7 @@ def _argument_problem(params: dict[str, Any]) -> str | None:
                 if not isinstance(arguments[key], bool):
                     raise ToolError(f"'{key}' must be true or false")
             elif prop["type"] == "array":
-                _platforms(arguments)
+                _strings(arguments, key)
     except ToolError as e:
         return str(e)
     return None
