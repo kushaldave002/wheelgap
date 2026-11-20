@@ -89,8 +89,8 @@ PyYAML stays in the `--no-dev` selection because the `test` group also needs it.
 to test tooling. xattr 1.3.1 is within that range, but a matching wheel is not proof of dependency or application
 compatibility: re-resolve and test any upgrade. Source builds still need their own build/interpreter checks.
 
-Dropping `--no-dev`, so that every group in the lock is selected (the CI test jobs run `poetry install`, which
-installs the non-optional groups including `dev`), gives **72 packages** and the same two gaps.
+Dropping `--no-dev`, so that every group in the lock is selected (the CI pytest job runs `poetry install --with github-actions`,
+which installs every group, including `dev` and the optional `github-actions` group), gives **72 packages** and the same two gaps.
 
 ### A narrower group selection
 
