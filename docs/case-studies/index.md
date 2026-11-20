@@ -6,3 +6,4 @@ These pages check real open-source projects on the platforms their build configu
 - [FastAPI: CPython 3.15 test dependencies across three platforms](fastapi.md)
 - [Buzz: speech-to-text dependencies across three desktop targets](buzz.md)
 - [Aider: Python 3.14 wheels on Linux and Windows](aider.md)
+- [pydantic: CPython 3.14 test dependencies across three platforms](pydantic.md)
