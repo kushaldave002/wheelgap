@@ -27,6 +27,7 @@ from concurrent.futures import as_completed
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
+from datetime import datetime
 from functools import partial
 from typing import IO
 from urllib.parse import quote, unquote, urlparse, urlsplit, urlunsplit
@@ -43,6 +44,7 @@ from packaging.version import InvalidVersion, Version
 
 from . import __version__, cache
 from ._download_pool import DownloadPool
+from .cutoff import UploadTimeError, before_cutoff, describe
 from .sources import Package, SourceError
 
 DEFAULT_INDEX = "https://pypi.org/pypi"
@@ -846,6 +848,9 @@ def fill_simple(
     pkg: Package, base: str, auth: str | None, python: str | None = None, pythons: tuple[str, ...] = ()
 ) -> Package:
     pkg.resolutions = {}  # a refresh must not retain answers from the previous response
+    if pkg.exclude_newer is not None:
+        pkg.error = "exclude-newer needs upload times, which wheelgap reads only from PyPI's JSON API, not --index-url"
+        return pkg
     try:
         data = fetch_simple(f"{base}/{quote(pkg.key)}/", auth)
     except urllib.error.HTTPError as e:
@@ -918,7 +923,9 @@ def _supports_python(entry: dict, python: str | None, key: str = "requires_pytho
         return True
 
 
-def _newest_matching(data: dict, spec: str, python: str | None = None) -> tuple[str, list[dict]] | None:
+def _newest_matching(
+    data: dict, spec: str, python: str | None = None, exclude_newer: datetime | None = None
+) -> tuple[str, list[dict]] | None:
     """The newest matching release with non-yanked files supporting `python`, when supplied."""
     releases = data.get("releases")
     if not isinstance(releases, dict):
@@ -926,19 +933,28 @@ def _newest_matching(data: dict, spec: str, python: str | None = None) -> tuple[
         info, latest = data.get("info"), None
         if isinstance(info, dict):
             latest = info.get("version")
-        live = [e for e in _files(data.get("urls", [])) if not e.get("yanked") and _supports_python(e, python)]
+        live = [
+            e
+            for e in before_cutoff(_files(data.get("urls", [])), exclude_newer)
+            if not e.get("yanked") and _supports_python(e, python)
+        ]
         if isinstance(latest, str) and _in_spec(latest, spec) and live:
             return latest, live
         raise ValueError("no release list")  # reported as unknown, not as "can't install"
+    constraint = SpecifierSet(spec)
     usable = {}
     for text, entries in releases.items():
         try:
-            live = [e for e in _files(entries) if not e.get("yanked") and _supports_python(e, python)]
-            if live:
-                usable[Version(text)] = (text, live)
+            version = Version(text)
+            files = _files(entries)
         except (InvalidVersion, ValueError):
             continue
-    chosen = max(SpecifierSet(spec).filter(usable), default=None)
+        if not constraint.contains(version, prereleases=True):
+            continue
+        live = [e for e in before_cutoff(files, exclude_newer) if not e.get("yanked") and _supports_python(e, python)]
+        if live:
+            usable[version] = (text, live)
+    chosen = max(constraint.filter(usable), default=None)
     return usable[chosen] if chosen is not None else None
 
 
@@ -967,7 +983,7 @@ def _resolve_pythons(
 ) -> Package:
     """Share one index response, never files, between per-Python resolutions."""
     versions = tuple(dict.fromkeys(pythons))
-    if (bool(pkg.version) or bool(pkg.spec)) and len(versions) > 1:
+    if (bool(pkg.version) or bool(pkg.spec) or pkg.exclude_newer is not None) and len(versions) > 1:
         for py in versions:
             resolved = resolve(replace(pkg, resolutions={}), py)
             # Equal versions can still have different eligible files. Coalesce only identical answers.
@@ -990,7 +1006,7 @@ def fill(
     url = f"{base}/{name}/{quote(pkg.version or '')}/json" if pinned else f"{base}/{name}/json"
     # Only a pinned release is cached: the latest release, or a range's pick, can change at any upload.
     key = (base, pkg.key, pkg.version) if pkg.version else None
-    cached = cache.load_files(*key) if key and read_cache else None
+    cached = cache.load_files(*key) if key and read_cache and pkg.exclude_newer is None else None
     if key and read_cache and cached is not None:
         pkg.project_urls, pkg.home_page = cache.load_project_urls(*key)
     try:
@@ -1063,18 +1079,29 @@ def _fill_json_data(pkg: Package, data: dict, python: str | None, base: str) -> 
                 pkg.project_urls = {"Homepage": info["home_page"]}
             if isinstance(info.get("home_page"), str):
                 pkg.home_page = info["home_page"]
-        if not pinned and pkg.spec:
+        if not pinned and (pkg.spec or pkg.exclude_newer):
             # A range (numpy>=1.26,<2): check the release an installer would pick, not the latest.
-            found = _newest_matching(data, pkg.spec, python)
+            found = _newest_matching(data, pkg.spec or "", python, pkg.exclude_newer)
             if found is None:
-                pkg.error = f"no release matches {pkg.spec}" + (f" for Python {python}" if python else "")
+                pkg.error = (
+                    (f"no release matches {pkg.spec}" if pkg.spec else "no release")
+                    + (f" uploaded before exclude-newer ({describe(pkg.exclude_newer)})" if pkg.exclude_newer else "")
+                    + (f" for Python {python}" if python else "")
+                )
                 return pkg
             pkg.version, urls = found
             pkg.version_from_index = True
             names = [u["filename"] for u in urls if not u.get("yanked")]
             pkg.files = names
         elif pinned:
-            urls = _files(data.get("urls", []))
+            listed = _files(data.get("urls", []))
+            urls = before_cutoff(listed, pkg.exclude_newer)
+            if pkg.exclude_newer is not None and listed and not urls:
+                pkg.error = (
+                    f"{pkg.version} was uploaded after exclude-newer ({describe(pkg.exclude_newer)}), "
+                    "so uv won't install it"
+                )
+                return pkg
             live = [u for u in urls if _supports_python(u, python)]
             rejected = [u for u in urls if not _supports_python(u, python)]
             pkg.files = [u["filename"] for u in live]
@@ -1088,6 +1115,8 @@ def _fill_json_data(pkg: Package, data: dict, python: str | None, base: str) -> 
             names = [u["filename"] for u in urls if not u.get("yanked")]
             pkg.files = names
         pkg.found_on_pypi = base == DEFAULT_INDEX
+    except UploadTimeError as e:
+        pkg.error = str(e)
     except (ValueError, TypeError, KeyError, AttributeError):
         pkg.error = "unexpected response from the index"
     return pkg
