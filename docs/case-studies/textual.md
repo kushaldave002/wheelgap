@@ -16,8 +16,8 @@ extra on every Python except 3.9. This study checks the Python 3.14 jobs on:
 - `win-amd64`.
 - `macos-arm64` as an illustrative Apple-silicon target; the workflow's `macos-latest` label alone does not establish that runner's architecture.
 
-The scan selects the runtime dependencies plus the `syntax` extra (the tree-sitter packages) and leaves out the
-`dev` group that CI also installs. An all-wheel result says nothing about terminal rendering or screenshot-test behavior.
+The main scan selects the runtime dependencies plus the `syntax` extra (the tree-sitter packages) and leaves out the
+`dev` group that CI also installs; that wider selection is checked [below](#the-dev-group). An all-wheel result says nothing about terminal rendering or screenshot-test behavior.
 
 ## Reproduce
 
@@ -43,9 +43,60 @@ The report contains **25 packages**: the runtime dependencies plus the 16 tree-s
 
 There were no source, missing or unknown cells and no gap-specific upgrade suggestions. No dependency change is proposed.
 
+### The dev group
+
+The test job's `poetry install --extras syntax` also installs the `dev` group. Dropping `--no-dev` from the command
+above gives that selection: **105 packages**, and the scan exited **1** with two gaps, both from the `dev` group:
+
+```bash
+uvx --from wheelgap==0.13.0 python -m wheelgap poetry.lock -p 3.14 \
+  -t linux-x86_64,win-amd64,macos-arm64 --glibc 2.36 --extra syntax --explain --suggest --no-cache
+```
+
+Trimmed output (the watchdog rejected-file list is cut to its first two lines):
+
+```text
+wheelgap: note: --suggest didn't look up 2 packages whose index isn't known to be PyPI (mkdocs-exclude, watchdog), so their names stay private
+wheelgap 0.13.0 · poetry.lock · 105 packages · Python 3.14
+
+package         version  linux-x86_64  win-amd64  macos-arm64
+mkdocs-exclude  1.0.2    ● source      ● source   ● source
+watchdog        6.0.0    ✓             ✓          ● source
+
+103 packages with wheels for every target hidden (--all to show)
+
+mkdocs-exclude 1.0.2 on linux-x86_64: ● source
+  no wheels published for this version
+
+mkdocs-exclude 1.0.2 on win-amd64: ● source
+  no wheels published for this version
+
+mkdocs-exclude 1.0.2 on macos-arm64: ● source
+  no wheels published for this version
+
+watchdog 6.0.0 on macos-arm64: ● source
+  watchdog-6.0.0-cp313-cp313-macosx_10_13_universal2.whl  built for cp313-cp313, not CPython 3.14
+  watchdog-6.0.0-cp313-cp313-macosx_11_0_arm64.whl        built for cp313-cp313, not CPython 3.14
+  … and 21 more (--json lists them all)
+
+linux-x86_64  1 from source
+win-amd64     1 from source
+macos-arm64   2 from source
+2 of 105 packages have gaps: 2 will build from source.
+```
+
+mkdocs-exclude 1.0.2 publishes only an sdist, on every Python. watchdog 6.0.0's macOS wheels stop at CPython 3.13
+(its Linux and Windows wheels are `py3-none`, so those targets are covered); checked separately on PyPI,
+[watchdog 7.0.0 and 7.1.0](https://pypi.org/project/watchdog/7.1.0/#files) have `cp314` macOS arm64 wheels, and
+mkdocs, which pulls watchdog in, accepts `watchdog>=2.0`. A matching wheel is not proof of compatibility:
+re-resolve and test any upgrade.
+
 ## Independent pip check
 
-Pip **26.3** independently accepted all **25 wheel pins on each of the three targets** (75 in all).
+Pip **26.3** independently accepted all **25 wheel pins on each of the three targets** (75 in all), and every
+wheel pin of the dev-group selection (103 on Linux, 104 on Windows, 102 on macOS). Single-pin
+`--only-binary=:all:` checks of `mkdocs-exclude==1.0.2` (all three targets) and `watchdog==6.0.0` (macOS) exited 1
+with `No matching distribution found`; `watchdog==7.1.0` on macOS exited 0.
 
 To reproduce the wheel-only batches, extract pins by target from `report.json`:
 
