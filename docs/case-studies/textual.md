@@ -17,7 +17,7 @@ extra on every Python except 3.9. This study checks the Python 3.14 jobs on:
 - `macos-arm64` as an illustrative Apple-silicon target; the workflow's `macos-latest` label alone does not establish that runner's architecture.
 
 The main scan selects the runtime dependencies plus the `syntax` extra (the tree-sitter packages) and leaves out the
-`dev` group that CI also installs; that wider selection is checked [below](#the-dev-group). An all-wheel result says nothing about terminal rendering or screenshot-test behavior.
+`dev` group that CI also installs; that wider selection is checked [below](#the-dev-group).
 
 ## Reproduce
 
