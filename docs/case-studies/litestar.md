@@ -1,4 +1,4 @@
-# Litestar: documentation groups behind two source builds
+# Litestar: two documentation-only source builds on Python 3.14
 
 [Litestar](https://github.com/litestar-org/litestar) is an ASGI application framework. This study pins revision
 [`df860951b3ab08da7a0aaf3711b9b796e966642b`](https://github.com/litestar-org/litestar/tree/df860951b3ab08da7a0aaf3711b9b796e966642b),
