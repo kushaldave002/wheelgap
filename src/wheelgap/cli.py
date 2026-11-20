@@ -2194,6 +2194,15 @@ def _main(argv: list[str], project: Path | None = None) -> int:
             if source.poetry_extras_unsure is not None:
                 print(f"wheelgap: note: {source.label}: {source.poetry_extras_unsure}", file=sys.stderr)
     for source in sources:
+        # Always, like the note below: either may mean uv applies another upload cutoff than the one checked.
+        if source.exclude_newer_unread is not None:
+            print(f"wheelgap: note: {source.label}: {source.exclude_newer_unread}", file=sys.stderr)
+        if source.pyproject_extras is not None and os.environ.get("UV_EXCLUDE_NEWER"):
+            print(
+                f"wheelgap: note: {source.label}: UV_EXCLUDE_NEWER is set, which uv uses over the file's "
+                "exclude-newer; wheelgap doesn't read it",
+                file=sys.stderr,
+            )
         if source.pyproject_extras is not None:  # always: this answer differs from a lockfile's
             if source.deps_paths is None:
                 print(
@@ -2204,7 +2213,13 @@ def _main(argv: list[str], project: Path | None = None) -> int:
                         if source.kind == "script"
                         else "their own dependencies aren't checked (use a lockfile for that, or add --deps for PyPI), "
                     )
-                    + "and ranges were checked at the newest matching release",
+                    + "and ranges were checked at the newest matching release"
+                    + (
+                        " uploaded before exclude-newer"
+                        if source.exclude_newer is not None
+                        or any(cutoff is not None for cutoff in source.exclude_newer_package.values())
+                        else ""
+                    ),
                     file=sys.stderr,
                 )
             if source.requires_python and not quiet:  # the answer is right either way, so -q drops these
