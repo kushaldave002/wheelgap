@@ -79,6 +79,7 @@ nav:
       - FastAPI: case-studies/fastapi.md
       - Buzz: case-studies/buzz.md
       - Aider: case-studies/aider.md
+      - Pydantic AI: case-studies/pydantic-ai.md
       - pydantic: case-studies/pydantic.md
       - HERD: case-studies/herd.md
   - Integrations:
