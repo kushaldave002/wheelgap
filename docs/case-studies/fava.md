@@ -45,7 +45,7 @@ under `skipped` (an editable install, not an index package); it is not counted a
 
 ## Gaps and options
 
-The one gap is Beancount, rather than a Fava distribution. The same scan without `--json`:
+The one gap is Beancount, a dependency, not Fava itself. The same scan without `--json`:
 
 ```bash
 uvx --from wheelgap==0.13.0 python -m wheelgap uv.lock -p 3.15 \
