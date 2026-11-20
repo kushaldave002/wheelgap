@@ -77,6 +77,8 @@ nav:
       - Overview: case-studies/index.md
       - mitmproxy: case-studies/mitmproxy.md
       - FastAPI: case-studies/fastapi.md
+      - Buzz: case-studies/buzz.md
+      - Aider: case-studies/aider.md
   - Integrations:
       - Python API: python-api.md
       - MCP server: mcp.md
