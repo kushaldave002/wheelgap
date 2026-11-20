@@ -13,7 +13,7 @@ The pinned [CI matrix](https://github.com/pdm-project/pdm/blob/9af22ebcd76e966f4
 
 Linux uses wheelgap's default glibc floor **2.36**; it doesn't measure the runner's installed libc.
 
-Each job installs PDM from the checkout with `python -m pip install -U .`, which resolves its runtime dependencies from PyPI, and then installs the development environment from the lockfile with `pdm install -v -Gtest` ([ci.yml:77-86](https://github.com/pdm-project/pdm/blob/9af22ebcd76e966f4cbdddd2d50f2ebcf8b727bd/.github/workflows/ci.yml#L77-L86)): the `default` group plus the `test` group. The wheelgap command below selects the same two groups from the [pinned `pdm.lock`](https://github.com/pdm-project/pdm/blob/9af22ebcd76e966f4cbdddd2d50f2ebcf8b727bd/pdm.lock). The `test` group pulls in PDM's own `pytest` extra (`pdm[pytest]`); adding `--only-group pytest` selects the same 50 packages.
+Each 3.15 job installs PDM from the checkout with `python -m pip install -U .`, which resolves its runtime dependencies from PyPI, and then installs the development environment from the lockfile with `pdm install -v -Gtest` ([ci.yml:77-86](https://github.com/pdm-project/pdm/blob/9af22ebcd76e966f4cbdddd2d50f2ebcf8b727bd/.github/workflows/ci.yml#L77-L86)): the `default` group plus the `test` group. The wheelgap command below selects the same two groups from the [pinned `pdm.lock`](https://github.com/pdm-project/pdm/blob/9af22ebcd76e966f4cbdddd2d50f2ebcf8b727bd/pdm.lock). The `test` group pulls in PDM's own `pytest` extra (`pdm[pytest]`); adding `--only-group pytest` selects the same 50 packages.
 
 ## Reproduce the scan
 
@@ -51,7 +51,7 @@ The scan exits **1**, which wheelgap uses to report a wheel gap, not a command f
 
 ## MarkupSafe 3.0.3: a Python-version gap
 
-MarkupSafe 3.0.3 publishes wheels for CPython 3.10 through 3.14 (and 3.13t and 3.14t), but none tagged for 3.15, and a `cp314` wheel can't be used by `cp315`. It has an sdist, so wheelgap says `source`, not `missing`. In the `test` group it comes in through `werkzeug` 3.1.8 (`markupsafe>=2.1.1`), which `pytest-httpserver` needs.
+MarkupSafe 3.0.3 publishes wheels for CPython 3.9 through 3.14 (and 3.13t and 3.14t), but none tagged for 3.15, and a `cp314` wheel can't be used by `cp315`. It has an sdist, so wheelgap says `source`, not `missing`. In the `test` group it comes in through `werkzeug` 3.1.8 (`markupsafe>=2.1.1`), which `pytest-httpserver` needs.
 
 `--suggest` printed no upgrade here, and the note at the top says why: at this pin, `pdm.lock` lists each package's file names and hashes but not the index they came from, so wheelgap doesn't send the names to PyPI. Checking the name on its own, as a package spec, does look it up:
 
