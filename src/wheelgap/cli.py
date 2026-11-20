@@ -2213,7 +2213,13 @@ def _main(argv: list[str], project: Path | None = None) -> int:
                         if source.kind == "script"
                         else "their own dependencies aren't checked (use a lockfile for that, or add --deps for PyPI), "
                     )
-                    + "and ranges were checked at the newest matching release",
+                    + "and ranges were checked at the newest matching release"
+                    + (
+                        " uploaded before exclude-newer"
+                        if source.exclude_newer is not None
+                        or any(cutoff is not None for cutoff in source.exclude_newer_package.values())
+                        else ""
+                    ),
                     file=sys.stderr,
                 )
             if source.requires_python and not quiet:  # the answer is right either way, so -q drops these

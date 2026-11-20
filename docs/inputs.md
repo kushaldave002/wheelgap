@@ -422,10 +422,16 @@ date, which includes that whole day in the local time zone, as uv does. uv's rel
 and any other value are input errors: the cutoff a duration gives moves with the clock.
 
 The settings are read from the script's own block, or for a `pyproject.toml` from its `[tool.uv]` table, or from a
-`uv.toml` beside it, which uv reads instead. A `uv.toml` or `[tool.uv]` in a folder above (such as a workspace root),
-user settings, `UV_EXCLUDE_NEWER` and uv's command-line options aren't read; wheelgap prints a note when a folder
-above or `UV_EXCLUDE_NEWER` sets a cutoff. Lockfiles (`uv.lock`, `script.py.lock`) already record the files uv
-resolved, so no cutoff is applied to them, and requirements files have no `[tool.uv]` to read.
+`uv.toml` beside it, which uv reads instead. For a uv workspace member, uv uses the workspace root's settings (its
+`uv.toml`, else its `[tool.uv]`) and ignores the member's own, and so does wheelgap; it notes a cutoff the member sets
+that uv ignores. Membership is read from the root's `[tool.uv.workspace]` `members` and `exclude`: if they use a
+pattern wheelgap doesn't match as uv does (`**` or `..`) and a cutoff is set at the member or the root, the file is
+refused rather than checked under a guess. For a project outside a workspace with no `[tool.uv]` or `uv.toml` of its
+own, uv uses the settings in the nearest folder above that has them; wheelgap doesn't read those, and for any input it
+doesn't read user settings, `UV_EXCLUDE_NEWER` or uv's command-line options. It prints a note when a folder above or
+`UV_EXCLUDE_NEWER` sets a cutoff. Lockfiles (`uv.lock`, `script.py.lock`) already record the files uv resolved, so no cutoff is applied to
+them. For requirements files, `uv pip` applies the cutoff from `[tool.uv]` or a `uv.toml`, but wheelgap doesn't (and
+doesn't read `[tool.uv.pip]` `exclude-newer` either): their packages are checked at the newest matching release.
 
 A file without a valid PyPI `upload_time_iso_8601` makes its package unknown rather than being assumed old enough.
 wheelgap reads upload times only from PyPI's JSON API, so under `--index-url` a package with a cutoff is unknown.
