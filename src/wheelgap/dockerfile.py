@@ -119,6 +119,11 @@ _SYNTAX_DIRECTIVE_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9]*)[\t\n\f\r ]*=[\t\n\f\r
 _DOCKERFILE_SYNTAX_RE = re.compile(
     r"(?:docker\.io/)?docker/dockerfile(?::(?:1|latest|labs|1-labs|1\.(\d+)(?:\.\d+)?(?:-rc\d+)?(-labs)?))?", re.ASCII
 )
+# docker/dockerfile pinned by digest: the digest, not the tag, picks the image, so its version (and heredoc rules) is
+# unknown, but it is still docker/dockerfile.
+_DOCKERFILE_DIGEST_RE = re.compile(
+    r"(?:docker\.io/)?docker/dockerfile(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?@sha256:[0-9a-f]{64}", re.ASCII
+)
 
 # Heredocs, as BuildKit reads them: see _heredocs.
 # Go's unicode.IsSpace. Unlike str.isspace, it doesn't count \x1c-\x1f.
@@ -986,7 +991,14 @@ def _add_dir(dirs: set[str], folder: str) -> None:
         folder = posixpath.dirname(folder)
 
 
-def _read_copy(number: int, args: str, workdir: str | None, dirs: set[str], context: Path) -> _Copy:
+def _read_copy(
+    number: int,
+    args: str,
+    workdir: str | None,
+    dirs: set[str],
+    context: Path,
+    context_label: str = "the Dockerfile's folder",
+) -> _Copy:
     def unread(error: str) -> _Copy:
         return _Copy(number, (), "", False, error)
 
@@ -1004,10 +1016,10 @@ def _read_copy(number: int, args: str, workdir: str | None, dirs: set[str], cont
     for name in names:
         rel = posixpath.normpath(name)
         if name.startswith("/") or rel == ".." or rel.startswith("../"):
-            return unread(f"COPY {name}: only paths inside the build context (the Dockerfile's folder) are read")
+            return unread(f"COPY {name}: only paths inside the build context ({context_label}) are read")
         host = context / rel
         if not host.exists():
-            return unread(f"COPY {name}: not found in the build context (the Dockerfile's folder)")
+            return unread(f"COPY {name}: not found in the build context ({context_label})")
         if not host.resolve().is_relative_to(root):
             return unread(f"COPY {name}: a symlink out of the build context isn't read by --dockerfile-inputs")
         sources.append((rel, host, host.is_dir()))
@@ -1137,25 +1149,33 @@ def _pip_install_files(number: int, args: str) -> list[str]:
     return files
 
 
-def dockerfile_requirements(path: Path, build_args: Mapping[str, str] | None = None) -> list[tuple[int, Path]]:
+def dockerfile_requirements(
+    path: Path,
+    build_args: Mapping[str, str] | None = None,
+    context: Path | None = None,
+) -> list[tuple[int, Path]]:
     """(line, requirements file) for each `RUN pip install -r FILE` in the Dockerfile's final stage.
 
     FILE is followed back through the WORKDIR and COPY instructions before it to a file in the build context, taken
-    to be the Dockerfile's folder. Only a strict subset is read: a final stage built FROM an image (not an earlier
-    stage), WORKDIR with a literal path, plain `COPY SRC... DEST` from the build context, and RUN lines that are
-    exactly `pip install -r FILE` (or `python -m pip install`, with --no-cache-dir) or only system package commands
-    (_SYSTEM_COMMANDS). Anything else that may change what pip installs or put FILE in the image (any other RUN, ADD,
-    COPY --from, SHELL, an ENV or ARG setting PIP_ or UV_ variables, a pip config file, a .dockerignore, a `# syntax=`
-    frontend other than docker/dockerfile, a nested -r or -c) is a DockerfileError naming its line, never a guess.
+    to be the Dockerfile's folder (or `context` if given). Only a strict subset is read: a final stage built FROM an
+    image (not an earlier stage), WORKDIR with a literal path, plain `COPY SRC... DEST` from the build context, and
+    RUN lines that are exactly `pip install -r FILE` (or `python -m pip install`, with --no-cache-dir) or only system
+    package commands (_SYSTEM_COMMANDS). Anything else that may change what pip installs or put FILE in the image
+    (any other RUN, ADD, COPY --from, SHELL, an ENV or ARG setting PIP_ or UV_ variables, a pip config file, a
+    .dockerignore, a `# syntax=` frontend other than docker/dockerfile, a nested -r or -c) is a DockerfileError
+    naming its line, never a guess.
     """
     try:
         text = path.read_bytes().decode("utf-8-sig")
     except UnicodeDecodeError as e:
         byte = f"0x{e.object[e.start]:02x}"
         raise DockerfileError(f"{path}: not UTF-8 (byte {byte} at offset {e.start}), pass -p/-t instead") from None
-    context = path.parent
+    context_dir = context if context is not None else path.parent
+    context_label = str(context) if context is not None else "the Dockerfile's folder"
     try:
-        return _dockerfile_requirements(text, context, path.name, build_args)
+        return _dockerfile_requirements(
+            text, context_dir, path.name, build_args, dockerfile_dir=path.parent, context_label=context_label
+        )
     except DockerfileError as e:
         number, _, message = str(e).removeprefix("line ").partition(": ")
         if number.isdecimal():  # `path:line: message`, as editors and CI logs link it
@@ -1164,9 +1184,15 @@ def dockerfile_requirements(path: Path, build_args: Mapping[str, str] | None = N
 
 
 def _dockerfile_requirements(
-    text: str, context: Path, name: str, build_args: Mapping[str, str] | None
+    text: str,
+    context: Path,
+    name: str,
+    build_args: Mapping[str, str] | None,
+    dockerfile_dir: Path | None = None,
+    context_label: str = "the Dockerfile's folder",
 ) -> list[tuple[int, Path]]:
-    for ignore in (context / ".dockerignore", context / f"{name}.dockerignore"):
+    df_dir = dockerfile_dir if dockerfile_dir is not None else context
+    for ignore in (context / ".dockerignore", df_dir / f"{name}.dockerignore"):
         if ignore.exists():
             raise DockerfileError(
                 f"{ignore.name} may leave files out of the build context: --dockerfile-inputs doesn't read it yet"
@@ -1174,12 +1200,22 @@ def _dockerfile_requirements(
     lines = [line.rstrip("\r") for line in text.split("\n")]
     if _escape_char(lines) != "\\":
         raise DockerfileError("--dockerfile-inputs only reads Dockerfiles with the default \\ escape")
-    if _heredoc_rules(syntax := _syntax_directive(lines)) is None:
+    syntax = _syntax_directive(lines)
+    # A digest-pinned docker/dockerfile reads FROM, WORKDIR, COPY and RUN as any version does; a heredoc under it is
+    # refused by _parse_froms, as plain --dockerfile refuses it.
+    if _heredoc_rules(syntax) is None and not (syntax and _DOCKERFILE_DIGEST_RE.fullmatch(syntax)):
         raise DockerfileError(
             f"# syntax={syntax}: --dockerfile-inputs only reads Dockerfiles for docker/dockerfile frontends"
         )
     instructions: list[tuple[int, str]] = []
     froms, _ = _parse_froms(text, instructions=instructions)
+    if _heredoc_rules(syntax) is None:  # a digest-pinned docker/dockerfile: any version, so any `<<` may be a heredoc
+        for number, instruction in instructions:
+            if _heredoc_args(instruction, "\\") is not None:
+                raise DockerfileError(
+                    f"line {number}: # syntax={syntax} may read the heredocs in {instruction.strip()[:60]!r} "
+                    "differently from docker/dockerfile 1.16 and later, which wheelgap follows"
+                )
     if not froms:
         raise DockerfileError("no FROM line found")
     final_line = froms[-1][0]
@@ -1209,7 +1245,7 @@ def _dockerfile_requirements(
             if workdir is not None:
                 _add_dir(dirs, workdir)
         elif keyword == "COPY":
-            copies.append(copy := _read_copy(number, args, workdir, dirs, context))
+            copies.append(copy := _read_copy(number, args, workdir, dirs, context, context_label))
             if _copies_pip_config(copy):
                 run_error = f"line {number}: a pip config file may change what pip installs"
         elif keyword == "ADD":

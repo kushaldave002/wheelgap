@@ -105,8 +105,9 @@ lock's files if a lookup fails).
   as 0.13.0 did. A requirements file compiled with hashes already pins what they install, so it's never refused.
   `allow_skipped` does nothing without `deps=True`.
 - `extras=`, `all_extras=True`, `groups=`, `only_groups=` and `no_dev=True` select the same installation as
-  `--extra`, `--all-extras`, `--group`, `--only-group` and `--no-dev`. With no selectors, lockfiles keep the
-  conservative check of every extra and group. Passing `extras=[]` or `groups=[]` explicitly selects no extras
+  `--extra`, `--all-extras`, `--group`, `--only-group` and `--no-dev`. With no selectors, a `uv.lock` is checked as
+  `uv sync --all-packages --all-extras --all-groups` installs it, and other lockfiles keep the conservative check of
+  every extra and group. Passing `extras=[]` or `groups=[]` explicitly selects no extras
   and the installer's default groups. uv and Poetry locks support extras and groups; PDM locks support groups.
   With `deps=True`, a `pyproject.toml` accepts extras and explicitly selected PEP 735 groups; `only_groups`
   leaves out the project's dependencies unless the group requires the project itself. A groups-only
@@ -156,6 +157,7 @@ Each check returns a `Result` (a list of them for `check_packages()`, `check_loc
 | `gaps` | the targets with a gap (`source`, `missing` or `unknown`) |
 | `bundled_versions`, `bundled_version`, `bundled_version_differs` | with `pyodide_locks`: see [Pyodide](#pyodide) |
 | `issues_url` | the package's issue tracker URL from PyPI metadata, or `None` when absent or not on PyPI |
+| `pip_refuses` | for a `uv.lock` checked with `online=True` (after 0.13.0): the files uv installs and pip would refuse, each mapped to the reason (`"requires Python <3.15,>=3.10"`); empty otherwise. uv ignores `Requires-Python` upper bounds, and `statuses` follow uv. `to_dict()` includes `"pip_refuses"` when it isn't empty |
 | `to_dict()` | the package in the shape of a `--json` package entry, keyed by each target's full label (`"3.13 musl-aarch64"`, with the Python even when only one is checked) |
 
 ### Explaining a gap

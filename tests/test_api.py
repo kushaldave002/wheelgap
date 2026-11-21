@@ -1100,3 +1100,29 @@ def test_check_lockfile_deps_allow_skipped_resolves_index_packages(tmp_path):
     req_clean.write_text("app==1.0\n", encoding="utf-8")
     res_clean = wheelgap.check_lockfile(req_clean, [WIN, LIN], deps=True, allow_skipped=True)
     assert sorted(r.name for r in res_clean) == ["app", "crypt", "lib", "winonly"]
+
+
+def test_check_lockfile_names_a_pyproject_beside_the_lock_that_isnt_utf8(tmp_path, fake_pypi):
+    # The command line reads [tool.wheelgap] from the first input's folder first, so it reaches this message only for
+    # a later input; the API reads no [tool.wheelgap], so it always does.
+    (tmp_path / "uv.lock").write_text(
+        'version = 1\n[manifest]\nrequirements = [{ name = "fastlib" }]\n'
+        '[[package]]\nname = "fastlib"\nversion = "2.0.0"\n'
+        'source = { registry = "https://pypi.org/simple" }\n'
+        'wheels = [{ url = "https://files.example/fastlib-2.0.0-cp313-cp313-manylinux_2_17_x86_64.whl" }]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "pyproject.toml").write_bytes("[tool.uv]\n# café\n".encode("latin-1"))
+    with pytest.raises(SourceError, match=r"pyproject\.toml: isn't UTF-8, so its uv build restrictions can't be read"):
+        wheelgap.check_lockfile(tmp_path / "uv.lock", wheelgap.make_targets("3.13", "linux-x86_64"), offline=True)
+    assert not fake_pypi
+
+
+def test_check_lockfile_names_a_pyproject_beside_the_lock_that_isnt_utf8_when_selecting_groups(fixtures, tmp_path):
+    # With a uv.toml beside the lock, the build restrictions come from it, so the default-groups read is the first
+    # to open this pyproject.toml.
+    (tmp_path / "uv.lock").write_bytes((fixtures / "uvselect" / "uv.lock").read_bytes())
+    (tmp_path / "uv.toml").write_text("", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_bytes("[tool.uv]\n# caf\xe9\n".encode("latin-1"))
+    with pytest.raises(SourceError, match=r"pyproject\.toml: isn't UTF-8, so its \[tool\.uv\] default-groups"):
+        wheelgap.check_lockfile(tmp_path, wheelgap.make_targets("3.13", "linux-x86_64"), offline=True, groups=["docs"])

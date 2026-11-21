@@ -69,6 +69,15 @@ Packages that can't come from an index, such as Git, path or URL dependencies, a
 is walked per target from the project and workspace members (and the lock's dependency groups), so a package that
 only a Windows-only dependency pulls in isn't reported on Linux.
 
+**Answers follow `uv sync`**, with and without `--online` (0.13.0 followed pip with `--online`). uv
+[ignores `Requires-Python` upper bounds](https://docs.astral.sh/uv/reference/internals/resolver/#requires-python), so
+a pin whose release says `<3.15` still counts on Python 3.15, where pip would refuse it (when installing from a
+requirements file exported from the lock, for example). With `--online` (after 0.13.0), wheelgap says where the two
+differ: a note on stderr gives the number of such packages, `--explain` names them, and `--json` lists the files in
+each package's `pip_refuses`. Without `--online` it can't tell, because the lock doesn't record each file's
+`Requires-Python`. Only a plain `<` or `<=` bound is read this way: a file left out by `==3.14.*`, `~=` or `!=` stays
+left out with `--online`.
+
 **Skipped:** packages whose source is `editable`, `virtual`, `git`, `path`, `directory` or `url`. Packages from
 another index keep their locked files and are never looked up on PyPI.
 
@@ -111,6 +120,11 @@ project extras are included only when requested. `--no-dev` removes `dev`, while
 dependencies and default groups. Combine `--only-group` with `--group` to add more groups, but not with
 `--extra`/`--all-extras`. An explicit `dev` group conflicts with `--no-dev`. Unknown extra or group names are errors.
 
+Without any selector, a `uv.lock` is checked the way `uv sync --all-packages --all-extras --all-groups` installs it:
+every workspace member with all its extras and groups, and a dependency's extras only where some edge requests them on
+that target. Where a lock declares conflicting extras, which `uv sync --all-extras` refuses, wheelgap checks both
+sides.
+
 With selection enabled, rooted workspaces start at the root project (members outside the selection aren't checked,
 and a note on stderr names them); virtual workspaces start at their members. Dependency-requested extras are followed
 transitively, including local workspace dependencies, rather than enabling every extra of every dependency.
@@ -128,6 +142,12 @@ targets; see [Targets](targets.md#how-targets-are-chosen).
 **Read:** each package's wheel and sdist filenames, its `marker`, its `index`, and the file's `requires-python`
 (with the same re-check as `uv.lock` for Pythons it leaves out).
 
+A package's own `requires-python` is applied to the target Python (after 0.13.0): where the range leaves the Python
+out, the pin is `missing` there, because an installer must refuse it
+([the pylock.toml specification](https://packaging.python.org/en/latest/specifications/pylock-toml/#installation)),
+and `--explain` gives the range. With `--online`, a package looked up on the index goes by the index's per-file
+`Requires-Python` instead.
+
 **Skipped:** `vcs`, `directory` and `archive` packages that list no wheels or sdist.
 
 `pylock.toml` has no dependency graph that wheelgap reads, so `--explain` shows no dependency path, and dependency
@@ -137,6 +157,13 @@ selection flags don't apply.
 
 **Read:** each package's files (from its `files` list, or from `[metadata.files]` in older locks) and its markers.
 
+A package's `python-versions` is applied to the target Python (after 0.13.0) in locks from lock-version 2.1 on: where
+the range leaves the Python out, the pin is `missing` there and `--explain` gives the range. Poetry only locks a
+package for the Pythons its markers select, so this changes an answer only for a Python outside the range the project
+was locked for (`-p 3.14` when the project says `<3.14`), where it shows which pins hold the project back. `*`, and a
+Poetry constraint that isn't a PEP 440 specifier (`^3.9`), restrict nothing. With `--online`, a package looked up on
+the index goes by the index's per-file `Requires-Python` instead.
+
 **Skipped:** packages whose source type is `git`, `hg`, `svn`, `bzr`, `directory`, `file` or `url`. A package from
 another index (a `legacy` source) keeps its locked files and isn't looked up on PyPI. Old locks that record only
 hashes and no file names are looked up on the index; packages in them from another index are skipped as
@@ -144,7 +171,10 @@ hashes and no file names are looked up on the index; packages in them from anoth
 
 **Lock versions before 2.1** (all of Poetry 1.x) record markers only on dependency edges, so wheelgap walks the
 dependency graph from the packages nothing depends on and from the dependencies declared in the `pyproject.toml`
-next to the lock. `--explain` shows the dependency path for these locks.
+next to the lock. `--explain` shows the dependency path for these locks. `python-versions` isn't applied to them: the
+lock doesn't say which Pythons a direct dependency is installed for (`numpy = [{version = "1.26.4", python = "<3.13"},
+...]` is only in `pyproject.toml`), so the range would report a pin as `missing` on a Python Poetry never installs it
+on.
 
 **Dependency selection** (Poetry 2.x locks): `--group`, `--only-group` and `--no-dev` work with Poetry's meanings, and
 configured `groups` apply too. `main` and every group not marked `optional = true` in `pyproject.toml` count;
@@ -175,6 +205,13 @@ the lock alone can't tell, wheelgap checks a superset of what any Poetry 2.x ins
 
 **Read:** each package's files (from its `files` list, or from `[metadata.files]` before PDM 2.8) and its `marker`.
 A package with no recorded files is looked up on the index.
+
+A package's `requires_python` is applied to the target Python (after 0.13.0) in locks made with the
+`inherit_metadata` strategy (PDM's default since 2.11), which records each package's marker: where the range leaves
+the Python out, the pin is `missing` there and `--explain` gives the range. As with `poetry.lock`, this changes an
+answer only for a Python outside the range the project was locked for. It isn't applied to a lock without
+`inherit_metadata`, which doesn't say which Pythons a package is installed for. With `--online`, a package looked up
+on the index goes by the index's per-file `Requires-Python` instead.
 
 **Skipped:** `git`, `hg`, `svn`, `bzr`, `path`, `url` and `file` packages.
 
@@ -366,6 +403,8 @@ kept where wheelgap doesn't read them (check a lockfile instead).
 
 `check_lockfile()` and `wheelgap diff` don't read `pyproject.toml` as an input.
 
+uv's `exclude-newer` upload cutoff is applied: see [Resolution upload cutoffs](#resolution-upload-cutoffs).
+
 ## Python scripts
 
 A single-file script can declare what it needs in a `# /// script` block
@@ -403,6 +442,36 @@ lines to add to the block for `uv run`. To check what the script installs, pass 
 `check_lockfile()` and `wheelgap diff` don't read a script.
 
 A `.py` argument that isn't an existing file, such as `discord.py`, is still a [package name](#package-names).
+
+The block's `[tool.uv]` can also set an [upload cutoff](#resolution-upload-cutoffs).
+
+## Resolution upload cutoffs
+
+For `pyproject.toml` inputs and PEP 723 scripts, wheelgap applies uv's `exclude-newer` as uv does: a file uploaded
+at or after the cutoff is left out, so a release is checked with only its earlier files, and a release with none of
+them is passed over. That holds for ranges, unpinned requirements and exact `==` pins alike, with and without
+`--deps`: a wheel added to a pinned release after the cutoff isn't counted, and a pinned release uploaded after it is
+unknown, since uv won't install it. `exclude-newer-package` gives each package it names its own cutoff, or none with
+`false`.
+
+A cutoff is an RFC 3339 timestamp with an explicit offset (for example `"2025-01-01T00:00:00Z"`), or a `"YYYY-MM-DD"`
+date, which includes that whole day in the local time zone, as uv does. uv's relative durations (`"7 days"`, `"P7D"`)
+and any other value are input errors: the cutoff a duration gives moves with the clock.
+
+The settings are read from the script's own block, or for a `pyproject.toml` from its `[tool.uv]` table, or from a
+`uv.toml` beside it, which uv reads instead. For a uv workspace member, uv uses the workspace root's settings (its
+`uv.toml`, else its `[tool.uv]`) and ignores the member's own, and so does wheelgap; it notes a cutoff the member sets
+that uv ignores. Membership is read from the root's `[tool.uv.workspace]` `members` and `exclude`: if they use a
+pattern wheelgap doesn't match as uv does (`**` or `..`) and a cutoff is set at the member or the root, the file is
+refused rather than checked under a guess. For a project outside a workspace with no `[tool.uv]` or `uv.toml` of its
+own, uv uses the settings in the nearest folder above that has them; wheelgap doesn't read those, and for any input it
+doesn't read user settings, `UV_EXCLUDE_NEWER` or uv's command-line options. It prints a note when a folder above or
+`UV_EXCLUDE_NEWER` sets a cutoff. Lockfiles (`uv.lock`, `script.py.lock`) already record the files uv resolved, so no cutoff is applied to
+them. For requirements files, `uv pip` applies the cutoff from `[tool.uv]` or a `uv.toml`, but wheelgap doesn't (and
+doesn't read `[tool.uv.pip]` `exclude-newer` either): their packages are checked at the newest matching release.
+
+A file without a valid PyPI `upload_time_iso_8601` makes its package unknown rather than being assumed old enough.
+wheelgap reads upload times only from PyPI's JSON API, so under `--index-url` a package with a cutoff is unknown.
 
 ## Package names
 

@@ -79,9 +79,19 @@ nav:
       - FastAPI: case-studies/fastapi.md
       - Buzz: case-studies/buzz.md
       - Aider: case-studies/aider.md
-      - Prefect: case-studies/prefect.md
       - pydantic: case-studies/pydantic.md
       - HERD: case-studies/herd.md
+      - Textual: case-studies/textual.md
+      - Poetry: case-studies/poetry.md
+      - Fava: case-studies/fava.md
+      - Typer: case-studies/typer.md
+      - PDM: case-studies/pdm.md
+      - Streamlit: case-studies/streamlit.md
+      - Litestar: case-studies/litestar.md
+      - FastMCP: case-studies/fastmcp.md
+      - Pydantic AI: case-studies/pydantic-ai.md
+      - MCP Python SDK: case-studies/mcp-python-sdk.md
+      - Prefect: case-studies/prefect.md
   - Integrations:
       - Python API: python-api.md
       - MCP server: mcp.md

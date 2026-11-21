@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import tomllib
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import ParseResult, unquote, urlparse
@@ -23,6 +26,8 @@ from packaging.utils import (
     parse_wheel_filename,
 )
 from packaging.version import InvalidVersion, Version
+
+from .cutoff import parse_cutoff
 
 if TYPE_CHECKING:
     from .targets import Target
@@ -81,6 +86,18 @@ class Package:
     resolutions: dict[str, Package] = field(default_factory=dict)
     # Files of a pinned release whose Requires-Python excludes the target Python, mapped to their --explain reason.
     requires_python_rejected: dict[str, str] = field(default_factory=dict)
+    # The release's Requires-Python as the lock records it for the package (pylock.toml's requires-python,
+    # poetry.lock's python-versions, pdm.lock's requires_python), applied to the lock's own files per target Python
+    # (pypi.apply_locked_python_ranges). Only kept where the lock also records each package's markers (always in a
+    # pylock.toml; Poetry from lock-version 2.1; PDM with inherit_metadata). Poetry and PDM lock a package only for
+    # the Pythons its markers select, so there a range that leaves a target out says something only for a Python
+    # outside the project's own range. Without the markers the package would be reported `missing` on a Python the
+    # installer never installs it for (numpy = [{version = "1.26.4", python = "<3.13"}, ...] in pyproject.toml).
+    locked_requires_python: str | None = None
+    # Yanked status of Python-rejected files, needed when applying uv's upper-bound policy.
+    python_rejected_yanked: frozenset[str] = frozenset()
+    # Files admitted by uv that pip would refuse for this Python.
+    pip_refuses: dict[str, str] = field(default_factory=dict)
     # Distribution selection policy from requirements files or uv project configuration.
     no_binary: bool = False
     only_binary: bool = False
@@ -89,6 +106,7 @@ class Package:
     # PyPI project metadata URLs (project_urls and home_page).
     project_urls: dict[str, str] | None = None
     home_page: str | None = None
+    exclude_newer: datetime | None = field(default=None, repr=False, compare=False)
 
     @property
     def key(self) -> str:
@@ -119,7 +137,8 @@ Edge = tuple[str, str | None, str | None, dict[str, object] | None]
 
 @dataclass(frozen=True)
 class UvSelection:
-    """Explicit installation selection. None on a Source keeps the conservative all-dependencies walk."""
+    """Explicit installation selection. None on a uv.lock Source checks what
+    `uv sync --all-packages --all-extras --all-groups` installs."""
 
     extras: frozenset[str] = frozenset()
     all_extras: bool = False
@@ -141,6 +160,12 @@ class Source:
     root_groups: dict[int, str] = field(default_factory=dict)
     # uv.lock only: the project's requires-python. uv keeps only the wheels that can serve it.
     requires_python: str | None = None
+    # Scripts and pyproject.toml: uv's exclude-newer (#521). A file uploaded at or after the cutoff isn't installed;
+    # exclude-newer-package gives the packages it names their own cutoff, or none (uv's `false`: None here).
+    exclude_newer: datetime | None = None
+    exclude_newer_package: dict[str, datetime | None] = field(default_factory=dict)
+    # A uv setting that may set a cutoff here but that wheelgap doesn't read, for a note.
+    exclude_newer_unread: str | None = None
     # Retain uv edge provenance for an explicit installation selection. The existing flattened
     # graph remains untouched, preserving conservative behavior when no selectors are supplied.
     uv_packages: list[dict] | None = None
@@ -218,6 +243,10 @@ class Source:
     # --deps: all distinct direct requirements that reach each transitive package, per target.
     deps_direct: dict[Target, dict[int, tuple[str, ...]]] | None = None
 
+    def cutoff_for(self, key: str) -> datetime | None:
+        """The upload cutoff uv applies to this package: its exclude-newer-package entry, else exclude-newer."""
+        return self.exclude_newer_package[key] if key in self.exclude_newer_package else self.exclude_newer
+
 
 def pythons_outside_lock(source: Source, targets: Iterable[Target], *, bounds_only: bool = True) -> list[str]:
     """Target Pythons the source's requires-python leaves out, e.g. ['3.14t'] for `==3.13.*`.
@@ -248,6 +277,51 @@ def pythons_outside_lock(source: Source, targets: Iterable[Target], *, bounds_on
         if not any(spec.contains(v, prereleases=True) for v in tries):
             out.append(t.python)
     return list(dict.fromkeys(out))
+
+
+def uv_ignores_python_rejection(requires: str, python: str) -> bool:
+    """Whether the target misses only an explicit upper bound, using the index check's late-patch version."""
+    try:
+        spec = SpecifierSet(requires)
+        if any(clause.operator not in {"<", "<=", ">", ">=", "=="} or clause.version.endswith(".*") for clause in spec):
+            return False
+        version = f"{python}.99"
+        lower = SpecifierSet(",".join(str(clause) for clause in spec if clause.operator not in {"<", "<="}))
+        return not spec.contains(version) and lower.contains(version)
+    except (InvalidSpecifier, InvalidVersion):
+        return False
+
+
+def restore_uv_python_files(packages: Iterable[Package], pythons: Iterable[str]) -> None:
+    """Apply uv's policy to the looked-up distributions for each Python."""
+    for pkg in packages:
+        restored_variants: list[Package] = []
+        for python in pythons:
+            variant = pkg.resolutions.get(python, pkg)
+            if variant.files is None or variant.error:
+                continue
+            # Index resolution coalesces identical answers. Copy before restoring files for just one Python.
+            refusals = {
+                filename: reason
+                for filename, reason in variant.requires_python_rejected.items()
+                if uv_ignores_python_rejection(reason.removeprefix("requires Python "), python)
+            }
+            if not refusals:
+                continue
+            restored = replace(
+                variant,
+                files=[*variant.files, *refusals],
+                requires_python_rejected={
+                    file: reason for file, reason in variant.requires_python_rejected.items() if file not in refusals
+                },
+                yanked=variant.yanked | (variant.python_rejected_yanked & refusals.keys()),
+                pip_refuses=refusals,
+                resolutions={},
+            )
+            variant = next((p for p in restored_variants if p == restored), restored)
+            if variant is restored:
+                restored_variants.append(restored)
+            pkg.resolutions[python] = variant
 
 
 def _filename(entry: dict, origin: str, package: str) -> str | None:
@@ -446,7 +520,11 @@ def _uv_build_restrictions(path: Path, source: Source) -> None:
         if not config_path.is_file():
             return
     try:
-        data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        text = config_path.read_text(encoding="utf-8-sig")  # -sig: Windows editors add a BOM
+    except UnicodeDecodeError:
+        raise SourceError(f"{config_path}: isn't UTF-8, so its uv build restrictions can't be read") from None
+    try:
+        data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
         raise SourceError(f"{config_path}: invalid TOML: {exc}") from None
     setting_table = "uv.toml" if standalone else "[tool.uv]"
@@ -622,7 +700,15 @@ def select_uv_dependencies(
             continue
         pyproject = source.uv_pyproject
         if pyproject is not None and pyproject.is_file():
-            uv = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("tool", {}).get("uv", {})
+            # Nothing else may have read this file yet: a uv.toml beside it replaces [tool.uv] for build restrictions.
+            try:
+                text = pyproject.read_text(encoding="utf-8-sig")  # -sig: Windows editors add a BOM
+            except UnicodeDecodeError:
+                raise SourceError(f"{pyproject}: isn't UTF-8, so its [tool.uv] default-groups can't be read") from None
+            try:
+                uv = tomllib.loads(text).get("tool", {}).get("uv", {})
+            except tomllib.TOMLDecodeError as exc:
+                raise SourceError(f"{pyproject}: invalid TOML: {exc}") from None
             defaults = uv.get("default-groups", ["dev"])
             if defaults == "all":
                 source.uv_default_groups = ["*"]
@@ -883,6 +969,9 @@ def parse_pylock(path: Path) -> Source:
                 files.append(_filename(p["sdist"], path.name, pkg.name) or f"{p['name']}-{p.get('version')}.tar.gz")
                 pkg.sdist_url, pkg.sdist_sha256 = _sdist_source(p["sdist"], "hashes")
             pkg.files = files
+        requires = p.get("requires-python")
+        if pkg.files is not None and isinstance(requires, str):
+            pkg.locked_requires_python = requires
         pkgs.append(pkg)
     requires = data.get("requires-python")
     return Source(path.name, pkgs, requires_python=requires if isinstance(requires, str) else None)
@@ -904,6 +993,8 @@ def parse_poetry_lock(path: Path) -> Source:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     metadata = data.get("metadata", {})
     legacy_files = metadata.get("files", {})
+    # Lock files before 2.1 (all of Poetry 1.x) only record markers on dependency edges, not on packages.
+    edge_markers_only = _version_tuple(str(metadata.get("lock-version", "2.1"))) < (2, 1)
     pkgs: list[Package] = []
     edges: dict[int, list[Edge]] = {}
     for p in data.get("package", []):
@@ -937,10 +1028,14 @@ def parse_poetry_lock(path: Path) -> Source:
                 None if entries is None else [f for f in (_filename(e, path.name, pkg.name) for e in entries) if f]
             )
         edges[len(pkgs)] = _poetry_edges(p)
+        requires = p.get("python-versions")
+        # Not before 2.1: a direct dependency's Python marker is only in pyproject.toml there, so the range could
+        # report a package for a Python that Poetry never installs it on (see Package.locked_requires_python).
+        if not edge_markers_only and pkg.files is not None and isinstance(requires, str):
+            pkg.locked_requires_python = requires
         pkgs.append(pkg)
-    # Lock files before 2.1 (all of Poetry 1.x) only record markers on dependency edges, not on
-    # packages, so walk the graph from the packages nothing depends on, as for uv.lock.
-    if _version_tuple(str(metadata.get("lock-version", "2.1"))) < (2, 1) and pkgs:
+    # With markers on edges only, walk the graph from the packages nothing depends on, as for uv.lock.
+    if edge_markers_only and pkgs:
         roots = set(_graph_roots(pkgs, edges))
         # The project's own dependencies are roots too, even if another package also depends on them
         # under a marker (colorama directly, and via click only on Windows).
@@ -1075,6 +1170,8 @@ def _add_once(pkgs: list[Package], seen: dict[tuple[str, str | None], Package], 
             first.registry = pkg.registry  # the other entry is from PyPI: this index decides for both
         else:
             first.skip = "private index"  # pinned to two indexes: no single lookup is safe for both
+    if first.locked_requires_python != pkg.locked_requires_python:
+        first.locked_requires_python = None  # conflicting entries can't establish a release-wide restriction
     if first.markers is not None:
         first.markers = None if pkg.markers is None else first.markers + pkg.markers
 
@@ -1085,6 +1182,7 @@ def parse_pdm_lock(path: Path) -> Source:
     legacy_files = metadata.get("files", {})
     locked_groups = metadata.get("groups")
     strategy = metadata.get("strategy")
+    inherit_metadata = isinstance(strategy, list) and "inherit_metadata" in strategy
     pkgs: list[Package] = []
     seen: dict[tuple[str, str | None], Package] = {}
     # Each package's groups, merged over its entries (PDM writes one per extras variant).
@@ -1119,6 +1217,10 @@ def parse_pdm_lock(path: Path) -> Source:
             if entries is not None:
                 pkg.files = [f for f in (_filename(e, path.name, pkg.name) for e in entries) if f]
             # Not in either place: leave files as None so the PyPI lookup fills them in.
+        requires = p.get("requires_python")
+        # Only with inherit_metadata, which records each package's marker (see Package.locked_requires_python).
+        if inherit_metadata and pkg.files is not None and isinstance(requires, str):
+            pkg.locked_requires_python = requires
         _add_once(pkgs, seen, pkg)
     return Source(
         path.name,
@@ -1129,7 +1231,7 @@ def parse_pdm_lock(path: Path) -> Source:
             if isinstance(locked_groups, list)
             else None
         ),
-        pdm_inherit_metadata=isinstance(strategy, list) and "inherit_metadata" in strategy,
+        pdm_inherit_metadata=inherit_metadata,
         pdm_pyproject=path.parent / "pyproject.toml",
     )
 
@@ -1302,6 +1404,156 @@ def parse_script(path: Path) -> Source:
     )
 
 
+_EXCLUDE_NEWER_KEYS = ("exclude-newer", "exclude-newer-package")
+
+
+def _cutoff_keys(settings: object) -> list[str]:
+    return [key for key in _EXCLUDE_NEWER_KEYS if isinstance(settings, dict) and key in settings]
+
+
+def _settings_beside(pyproject: Path, data: dict) -> tuple[dict, Path]:
+    """The uv settings uv reads for a pyproject.toml's folder: a uv.toml beside it, in place of [tool.uv], else its
+    [tool.uv] table. With the file they came from."""
+    config = pyproject.with_name("uv.toml")
+    if config.is_file():
+        try:
+            return tomllib.loads(config.read_text(encoding="utf-8-sig")), config
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+            raise SourceError(f"{config}: can't be read ({e}); uv reads its settings in place of [tool.uv]") from None
+    return _table(_table(data, "tool"), "uv"), pyproject
+
+
+def _glob_matches(project: Path, root: Path, globs: object, whole_parts: bool) -> bool | None:
+    """Whether a pattern in a [tool.uv.workspace] members list (`whole_parts`: a `*` stays within one folder name)
+    or exclude list matches `project`, as uv's glob crate does. None when none does but one wheelgap can't match the
+    way uv does (with `**` or `..`), or the list isn't a list of strings, might: a guess could be uv's other answer."""
+    if not isinstance(globs, list) or not all(isinstance(glob, str) for glob in globs):
+        return None
+    unsure = False
+    for glob in globs:
+        pattern = Path(os.path.normpath(glob))  # uv normalizes the pattern (`./`, `a/../b`) first too
+        if not pattern.parts or any(part == ".." or "**" in part for part in pattern.parts):
+            unsure = True
+            continue
+        target = project if pattern.is_absolute() else project.relative_to(root)
+        if whole_parts:
+            if len(target.parts) == len(pattern.parts) and all(map(fnmatchcase, target.parts, pattern.parts)):
+                return True
+        elif fnmatchcase(target.as_posix(), pattern.as_posix()):
+            return True
+    return None if unsure else False
+
+
+def _workspace_root(path: Path, data: dict) -> tuple[Path, dict, bool] | None:
+    """The workspace root of a pyproject.toml that's a uv workspace member, whose settings uv reads in place of the
+    member's own (uv loads settings from `workspace.install_path()`) (#521). As uv finds it: the first pyproject.toml
+    in a folder above decides, a member if its [tool.uv.workspace] members include this project and its exclude
+    doesn't; up to the repository root (the first folder with a .git). Returns the root's pyproject.toml, its data,
+    and whether the membership is certain, or None for a project that isn't a member."""
+    uv = _table(_table(data, "tool"), "uv")
+    if not isinstance(data.get("project"), dict) or "workspace" in uv or uv.get("managed") is False:
+        return None  # a workspace root itself, or a file uv doesn't treat as a workspace project
+    project = Path(os.path.normpath(path.absolute())).parent
+    for directory in project.parents:
+        if (root := directory / "pyproject.toml").is_file():
+            try:
+                root_data = tomllib.loads(root.read_text(encoding="utf-8-sig"))
+            except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+                return None  # uv can't find a workspace here either: it stops with an error
+            workspace = _table(_table(root_data, "tool"), "uv").get("workspace")
+            if workspace is None:
+                return None  # a folder of another project, such as its examples: uv ignores it
+            if not isinstance(workspace, dict):
+                return root, root_data, False
+            included = _glob_matches(project, directory, workspace.get("members", []), whole_parts=True)
+            excluded = _glob_matches(project, directory, workspace.get("exclude", []), whole_parts=False)
+            if included is False or excluded is True:
+                return None
+            return root, root_data, bool(included and excluded is False)
+        if (directory / ".git").exists():
+            break
+    return None
+
+
+def _read_exclude_newer(source: Source, data: dict, path: Path, script: bool) -> None:
+    """uv's exclude-newer and exclude-newer-package for this input (#521): from a script's own [tool.uv], or for a
+    pyproject.toml from a uv.toml beside it when there is one (uv then ignores [tool.uv]), else its [tool.uv]. For a
+    workspace member, uv reads the workspace root's settings in the same way and ignores the member's. A cutoff is a
+    timestamp or a date; uv's relative durations are refused, and so is anything else."""
+    workspace = None if script else _workspace_root(path, data)
+    if script:
+        settings, config = _table(_table(data, "tool"), "uv"), path
+    elif workspace is None:
+        settings, config = _settings_beside(path, data)
+    else:
+        root, root_data, certain = workspace
+        settings, config = _settings_beside(root, root_data)
+        # The member's own settings, which uv doesn't read (so one it couldn't read either isn't an error here).
+        own_config, own = _uv_config(path.parent) or (path, {})
+        if not certain:
+            if _cutoff_keys(own) or _cutoff_keys(settings):
+                raise SourceError(
+                    f"{path}: wheelgap can't tell whether this is a member of the workspace at {root} (its "
+                    "[tool.uv.workspace] members or exclude use patterns wheelgap doesn't match as uv does), "
+                    "and uv takes a member's exclude-newer from the workspace root's settings, not its own"
+                )
+            return
+        if keys := _cutoff_keys(own):
+            source.exclude_newer_unread = (
+                f"{own_config} sets {' and '.join(keys)}, which uv ignores in a workspace member: it uses the "
+                f"workspace root's settings ({config}), and so does wheelgap"
+            )
+    where = f"{config}:" if config.name == "uv.toml" else f"{config}: [tool.uv]"
+    if "exclude-newer" in settings:
+        try:
+            source.exclude_newer = parse_cutoff(settings["exclude-newer"])
+        except ValueError as e:
+            raise SourceError(
+                f"{where} exclude-newer must be a date or RFC 3339 timestamp: {e} "
+                "(wheelgap doesn't read uv's relative durations)"
+            ) from None
+    per_package = settings.get("exclude-newer-package", {})
+    if not isinstance(per_package, dict):
+        raise SourceError(f"{where} exclude-newer-package must be a table of package names")
+    for name, value in per_package.items():
+        key = canonicalize_name(name)
+        if key in source.exclude_newer_package:
+            raise SourceError(f"{where} exclude-newer-package names {key!r} twice once normalized")
+        try:
+            source.exclude_newer_package[key] = None if value is False else parse_cutoff(value)
+        except ValueError as e:
+            raise SourceError(
+                f"{where} exclude-newer-package {name} must be a date, an RFC 3339 timestamp or false: {e} "
+                "(wheelgap doesn't read uv's relative durations)"
+            ) from None
+    if workspace is None:  # a workspace root always has settings: uv looks no further up
+        source.exclude_newer_unread = _unread_exclude_newer(path, script)
+
+
+def _unread_exclude_newer(path: Path, script: bool) -> str | None:
+    """A uv.toml or pyproject.toml [tool.uv] in a folder above that uv may take exclude-newer from, which wheelgap
+    doesn't read: for a script, the nearest one from its folder up; for a pyproject.toml outside a workspace, the
+    nearest one above its folder when it has no uv.toml or [tool.uv] of its own (uv reads the nearest settings
+    only). Up to the repository root (the first with a .git)."""
+    folder = path.resolve().parent
+    for directory in (folder, *folder.parents):
+        if (found := _uv_config(directory)) is not None:
+            if not script and directory == folder:
+                return None  # the pyproject.toml's own settings, or a uv.toml beside it: read already
+            config, uv = found
+            if keys := _cutoff_keys(uv):
+                return f"{config} sets {' and '.join(keys)}, " + (
+                    "which uv may apply here too; wheelgap reads only the script's own block"
+                    if script
+                    else "which uv applies here, as this pyproject.toml has no uv settings of its own; wheelgap "
+                    "doesn't read settings from a folder above"
+                )
+            return None  # uv reads the nearest settings only
+        if (directory / ".git").exists():
+            break
+    return None
+
+
 def _builds_a_package(data: dict, path: Path) -> bool:
     """Whether a pyproject.toml with no [project] table still describes a buildable project: a [build-system]
     table, a setup.py or setup.cfg beside it, [tool.flit.metadata], or PDM-legacy [tool.pdm] dependencies."""
@@ -1313,6 +1565,14 @@ def _builds_a_package(data: dict, path: Path) -> bool:
     flit = tool.get("flit")
     pdm = tool.get("pdm")
     return (isinstance(flit, dict) and "metadata" in flit) or (isinstance(pdm, dict) and "dependencies" in pdm)
+
+
+def _has_poetry_dependencies(data: dict) -> bool:
+    """Whether [tool.poetry.dependencies] names anything but python."""
+    tool = data.get("tool")
+    poetry = tool.get("poetry") if isinstance(tool, dict) else None
+    poetry_deps = poetry.get("dependencies") if isinstance(poetry, dict) else None
+    return isinstance(poetry_deps, dict) and any(dep.lower() != "python" for dep in poetry_deps)
 
 
 def _project_source(data: dict, path: Path, script: bool = False) -> Source:
@@ -1334,10 +1594,7 @@ def _project_source(data: dict, path: Path, script: bool = False) -> Source:
         # poetry-core 2 builds [tool.poetry.dependencies] into the package whenever [project] lists no dependencies
         # or optional-dependencies (missing or empty: DependencyGroup.dependencies' "legacy mode"). A groups-only file
         # with them is a Poetry project too: --group would leave its dependencies out.
-        tool = data.get("tool")
-        poetry = tool.get("poetry") if isinstance(tool, dict) else None
-        poetry_deps = poetry.get("dependencies") if isinstance(poetry, dict) else None
-        if isinstance(poetry_deps, dict) and any(dep.lower() != "python" for dep in poetry_deps):
+        if _has_poetry_dependencies(data):
             raise SourceError(
                 f"{path}: the dependencies are in [tool.poetry.dependencies], not [project] dependencies, "
                 "so wheelgap can't read them; check poetry.lock instead"
@@ -1384,6 +1641,7 @@ def _project_source(data: dict, path: Path, script: bool = False) -> Source:
         pyproject_dynamic_extras="optional-dependencies" in dynamic,
         pypi_only=not (_names_an_index(data) or _nearby_config_names_an_index(path)),
     )
+    _read_exclude_newer(source, data, path, script)
     if isinstance(requires_python := project.get("requires-python"), str):
         source.requires_python = requires_python
     if isinstance(name := project.get("name"), str):
@@ -1522,6 +1780,9 @@ def _add_extras(source: Source, wanted: list[str]) -> None:
                 source.specs.append(line)
             if pkg not in source.packages:  # also in another extra or in dependencies: one row
                 source.packages.append(pkg)
+
+    for pkg in source.packages:  # pinned or not: uv leaves out a pinned release's later files too
+        pkg.exclude_newer = source.cutoff_for(pkg.key)
 
 
 def requirement_to_package(text: str, origin: str) -> Package:
@@ -2595,18 +2856,46 @@ def find_lockfile(directory: Path, pixi: bool = False) -> Path:
         if candidate.is_file():
             return candidate
     hint = "Pass a file, or package names like `wheelgap numpy psycopg2`."
-    if _has_project_table(directory / "pyproject.toml"):
-        pyproject = directory / "pyproject.toml"
-        hint = f"To check the direct dependencies in its pyproject.toml, run `wheelgap {pyproject}`. " + hint
+    pyproject = directory / "pyproject.toml"
+    project_hint = _pyproject_hint(pyproject)
+    if project_hint:
+        hint = project_hint + " " + hint
     raise SourceError(f"no lockfile found in {directory} (looked for {', '.join(LOCKFILES)}). {hint}")
 
 
-def _has_project_table(pyproject: Path) -> bool:
-    """For the "no lockfile" hint only: a missing or unreadable file just means no hint."""
+# A dependency group's name as PEP 735 allows it: letters, digits, `.`, `-` and `_`, starting and ending with a
+# letter or digit.
+_GROUP_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
+
+
+def _pyproject_hint(pyproject: Path) -> str | None:
+    """For the "no lockfile" error only: the command that checks the folder's pyproject.toml instead, when there is
+    one that would work. A missing or unreadable file just means no hint."""
     try:
-        return isinstance(tomllib.loads(pyproject.read_text(encoding="utf-8")).get("project"), dict)
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return False
+        return None
+    if isinstance(data.get("project"), dict):
+        return f"To check the direct dependencies in its pyproject.toml, run `wheelgap {pyproject}`."
+    groups = data.get("dependency-groups")
+    if "project" in data or not isinstance(groups, dict):
+        return None
+    # What _project_source refuses with --group: a setuptools, flit, PDM-legacy or Poetry project keeps its own
+    # dependencies outside [project], so the hint would only lead to that error.
+    if _builds_a_package(data, pyproject) or _has_poetry_dependencies(data):
+        return None
+    keys = [canonicalize_name(name) for name in groups]
+    if len(set(keys)) != len(keys):
+        return None  # two groups that are the same once normalized: refused whichever group is asked for
+    # The names are text from the file, and this message goes to a terminal, a CI log or an MCP client: only names
+    # PEP 735 allows are repeated, normalized as the `--group` error lists them.
+    names = sorted({canonicalize_name(name) for name in groups if _GROUP_NAME.fullmatch(name)})
+    if not names:
+        return None
+    return (
+        f"To check a dependency group in its pyproject.toml, run `wheelgap {pyproject} --group NAME` "
+        f"(groups: {', '.join(names)})."
+    )
 
 
 def parse_dist(path: Path) -> Source:

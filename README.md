@@ -15,7 +15,9 @@
 
 Point it at your lockfile and the platforms you ship to (ARM servers, Alpine images, Windows on ARM, free-threaded Python 3.14t). It tells you which packages pip or uv will have to compile from source, and which can't be installed at all.
 
-📊 **New: [wheel coverage for the top 5,000 PyPI packages](https://wheelgap.github.io/tracker/)**, by platform and Python version, updated nightly.
+🔎 **Try it on any public repo, in your browser: [wheelgap.github.io/tracker/check](https://wheelgap.github.io/tracker/check/).** Paste a GitHub repository. It reads the lockfile, works out the platforms the repo ships to from its CI and Dockerfiles, and lists every dependency with no prebuilt wheel there, with the release that fixes it. Nothing to install.
+
+📊 **[Wheel coverage for the top 5,000 PyPI packages](https://wheelgap.github.io/tracker/)**, by platform and Python version, updated nightly. 📚 **[Case studies](https://wheelgap.github.io/wheelgap/case-studies/)**: what wheelgap found in FastAPI, pydantic, Poetry, PDM, Streamlit, Typer and other projects, each pinned to a commit you can re-run.
 
 ![wheelgap demo](https://raw.githubusercontent.com/wheelgap/wheelgap/main/docs/demo.gif)
 
@@ -85,6 +87,9 @@ wheelgap --dockerfile Dockerfile
 # ...and check what it installs with RUN pip install -r requirements.txt
 wheelgap --dockerfile Dockerfile --dockerfile-inputs
 
+# ...built with `docker build -f docker/Dockerfile .`? Name the build context too
+wheelgap --dockerfile docker/Dockerfile --dockerfile-inputs --dockerfile-context .
+
 # Machine-readable, for scripts and CI
 wheelgap --json > wheelgap.json
 
@@ -129,7 +134,7 @@ resolutions appear in separate rows, including in JSON, with `n/a` for targets u
 
 `--explain` can also show the coverage tracker's notes (`--notes`), what a source build needs (`--build-info`), conda-forge builds that fit (`--conda-forge`), piwheels wheels for a Raspberry Pi gap (`--piwheels`) and the nearest newer release with wheels for a gap (`--suggest`). These are opt-in, since they send package names elsewhere ([which names](https://wheelgap.github.io/wheelgap/how-it-works/#pypi-origin)). `--suggest` is on by default when `--deps` resolved every input, since it already looked the whole tree up on PyPI; `--no-suggest` turns it off.
 
-`--fix` lists the gaps a wheel on wheelgap's [gap wheel index](https://wheelgap.github.io/wheels/) fills (today Windows on ARM for CPython 3.14 and 3.14t), with the `pyproject.toml` snippet for uv or the `--extra-index-url` line for pip. It reads the index's list in one request that names no package, and never changes the exit code ([how](https://wheelgap.github.io/wheelgap/recipes/#installing-from-the-gap-wheel-index)); `--print-gap-wheel-snippet` prints just that configuration for one uv.lock or requirements file, without writing it ([details](https://wheelgap.github.io/wheelgap/cli/#print-gap-wheel-snippet)).
+`--fix` lists the gaps a wheel on wheelgap's [gap wheel index](https://wheelgap.github.io/wheels/) fills (today Windows on ARM, musl Linux on ARM and free-threaded x86_64 Linux, for CPython 3.14 and 3.14t), with the `pyproject.toml` snippet for uv or the `--extra-index-url` line for pip. It reads the index's list in one request that names no package, and never changes the exit code ([how](https://wheelgap.github.io/wheelgap/recipes/#installing-from-the-gap-wheel-index)); `--print-gap-wheel-snippet` prints just that configuration for one uv.lock or requirements file, without writing it ([details](https://wheelgap.github.io/wheelgap/cli/#print-gap-wheel-snippet)).
 
 The docs cover [inputs and dependency selection](https://wheelgap.github.io/wheelgap/inputs/), [`--explain`](https://wheelgap.github.io/wheelgap/output/#explain), [the `--json` schema](https://wheelgap.github.io/wheelgap/output/#json), [every flag](https://wheelgap.github.io/wheelgap/cli/) and the [recipes](https://wheelgap.github.io/wheelgap/recipes/) for multi-arch images, monorepos and free-threading readiness.
 
