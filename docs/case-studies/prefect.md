@@ -232,6 +232,6 @@ For aarch64, change the architecture, stop the loop at 17 (`{36..17}`), and foll
 `linux-aarch64-pins.txt`.
 
 For a gap, replace `-r ... --report ...` with its single exact pin. The checks above compared
-pip’s selected package names and versions with the wheelgap rows and confirmed that every selected file was a wheel.
+pip's selected package names and versions with the wheelgap rows and confirmed that every selected file was a wheel.
 `--no-deps` deliberately does not validate consistency of the whole environment or activate project extras/groups.
 No Prefect code was run. New uploads can change these results.
