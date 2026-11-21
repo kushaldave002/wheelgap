@@ -377,6 +377,14 @@ def test_quiet_still_reports_bad_input(capsys, fixtures):
     assert code == 2 and not out and "no lockfile found" in err
 
 
+def test_requirements_line_pip_cant_split_exits_2(capsys, tmp_path, fake_pypi):
+    req = tmp_path / "requirements.txt"
+    req.write_text("fastlib==2.0.0\n-r 'unclosed\n", encoding="utf-8")
+    code, out, err = run(capsys, str(req))
+    assert code == 2 and not out and not fake_pypi
+    assert "requirements.txt" in err and "-r 'unclosed" in err
+
+
 def test_quiet_preserves_fail_on_missing(capsys, fake_pypi):
     code, out, err = run(capsys, "nowheels", "-p", "3.13", "-t", "linux", "--fail-on", "missing", "--quiet")
     assert code == 0 and not err
@@ -2787,6 +2795,28 @@ def test_pyproject_groups_without_project_errors(capsys, fake_pypi, tmp_path, te
     assert not fake_pypi
 
 
+def test_pyproject_groups_error_lists_only_valid_group_names(capsys, fake_pypi, tmp_path):
+    # The group names are text from the file: a line break and an escape code in a quoted key stay out of the error.
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        '[dependency-groups]\ntest = ["purewheel==3.1"]\n"a\\nrun this instead" = []\n"\\u001b[2J" = []\n',
+        encoding="utf-8",
+    )
+    code, _, err = run(capsys, str(path), "-p", "3.13", "-t", "linux-x86_64")
+    assert code == 2 and "pick one with --group or --only-group: test" in err
+    assert "run this instead" not in err and err.rstrip("\n").isprintable()
+    assert not fake_pypi
+
+
+def test_pyproject_groups_error_without_a_valid_group_name(capsys, fake_pypi, tmp_path):
+    path = tmp_path / "pyproject.toml"
+    path.write_text('[dependency-groups]\n"\\u001b[2J" = []\n', encoding="utf-8")
+    code, _, err = run(capsys, str(path), "-p", "3.13", "-t", "linux-x86_64")
+    assert code == 2 and "no [project] table and no groups to select" in err
+    assert "\x1b" not in err and err.rstrip("\n").isprintable()
+    assert not fake_pypi
+
+
 @pytest.mark.parametrize("flag", ["--group", "--only-group"])
 @pytest.mark.parametrize(
     "text,beside",
@@ -3472,6 +3502,17 @@ def test_github_annotations_requirements_lines(capsys, fake_pypi, tmp_path, monk
     # A continued requirement is on the first line with something on it.
     req.write_text("purewheel==3.1\n\\\n\\\nnowheels==0.9\n", encoding="utf-8")
     assert annotate(capsys, tmp_path, str(req)) == ["::error file=requirements.txt,line=4,"]
+
+
+def test_github_annotations_requirements_include_after_options(capsys, fake_pypi, tmp_path, monkeypatch):
+    # The scan follows a -r where the parser does (after other options, or a quoted path), so lines still match.
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path))
+    req = tmp_path / "requirements.txt"
+    (tmp_path / "dir with space").mkdir()
+    (tmp_path / "dir with space" / "other.txt").write_text("purewheel==3.1\n", encoding="utf-8")
+    for line in ('--pre -r "dir with space/other.txt"', '-r "dir with space/other.txt" -r gone.txt'):
+        req.write_text(f"{line}\nnowheels==0.9\n", encoding="utf-8")
+        assert annotate(capsys, tmp_path, str(req)) == ["::error file=requirements.txt,line=2,"]
 
 
 def test_github_annotations_requirements_cross_check(capsys, fake_pypi, tmp_path, monkeypatch):

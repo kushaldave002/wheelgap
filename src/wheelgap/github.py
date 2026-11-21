@@ -13,14 +13,16 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import tomllib
 from bisect import bisect_right
 from pathlib import Path
 
 from packaging.utils import canonicalize_name
 
+from . import gapwheels
 from .check import Row, Status
-from .sources import _COMMENT_RE, _INCLUDE_RE, _NAMED_URL_RE, Package, Source, SourceError, requirement_to_package
+from .sources import _COMMENT_RE, _NAMED_URL_RE, Package, Source, SourceError, _line_include, requirement_to_package
 from .targets import Target
 
 # GitHub shows at most 10 error and 10 warning annotations per step; the rest are dropped.
@@ -197,12 +199,17 @@ def requirement_lines(path: Path, seen: set[Path] | None = None) -> list[tuple[P
         line = _COMMENT_RE.split(raw, 1)[0].strip()
         if not line or line.startswith("#"):
             continue
-        if m := _INCLUDE_RE.match(line):
-            included = requirement_lines(path.parent / m.group(1).strip(), seen)
-            if included is None:
-                return None
-            out.extend(included)
-            continue
+        if line.startswith("-"):
+            try:  # the -r the parser follows, wherever it sits on the line (`--pre -r base.txt`)
+                include = _line_include(shlex.split(line), path.name)
+            except (ValueError, SourceError):
+                return None  # the parser refused this file, so there's nothing to map
+            if include and not include[0]:
+                included = requirement_lines(path.parent / include[1], seen)
+                if included is None:
+                    return None
+                out.extend(included)
+            continue  # other options, constraints and editables: never a package with a gap
         if line.startswith(("-", ".", "/")):
             continue  # options, constraints, editables and paths: never a package with a gap
         tokens = line.split()
@@ -325,8 +332,24 @@ GAP_WORDS = {
 }
 
 
+def gap_wheel_sentence(fills: list[gapwheels.Fill], multi_py: bool) -> str:
+    """--fix: what a package's annotation says when a gap wheel fills some of its gaps. `fills`: all of that
+    package's, which come from one input. The pip command for an input pip installs from as it is; a lockfile or a
+    script is pointed to the log's gap wheel section, as in gapwheels.explain_lines."""
+    on = ", ".join(dict.fromkeys(f.target.label(multi_py) for f in fills))
+    said = f" A gap wheel on wheelgap's gap wheel index fills {on} (unofficial, built by wheelgap from the PyPI sdist)"
+    if command := gapwheels.pip_install(fills[0]):
+        return f"{said}: {command}."
+    return f"{said}; see the gap wheel section of the log for how to use it."
+
+
 def annotation(
-    row: Row, targets: list[Target], level: str, locator: Locator, advisory: frozenset[Target] = frozenset()
+    row: Row,
+    targets: list[Target],
+    level: str,
+    locator: Locator,
+    advisory: frozenset[Target] = frozenset(),
+    fills: list[gapwheels.Fill] | None = None,
 ) -> str:
     multi_py = len({t.python for t in targets}) > 1
     by_status: dict[Status, list[str]] = {}
@@ -362,6 +385,8 @@ def annotation(
             message += " Source builds are allowed (fail-on missing), so this doesn't fail the run."
         else:
             message += " Gaps on advisory targets don't fail the run."
+    if fills:  # --fix: a gap wheel never changes the level, the title or the line
+        message += gap_wheel_sentence(fills, multi_py)
     location = locator.locate(pkg)
     if deps_resolved and location is not None and not (gap_targets and all(rooted)):
         # Not the file's own requirement on every gap target, so its own line (if it has one, say with a marker
@@ -386,17 +411,22 @@ def github_annotations(
     sources: list[Source],
     failing: list[Row],
     advisory: frozenset[Target] = frozenset(),
+    fills: list[gapwheels.Fill] | None = None,
 ) -> list[str]:
     """One ::error per failing package and one ::warning per package whose gaps don't fail the run (source builds
     that --fail-on missing allows, or gaps only on --advisory targets), at most ANNOTATION_LIMIT of each: past that,
-    the last one says how many more there are."""
+    the last one says how many more there are. `fills`: --fix's, so a package a gap wheel fills says so (None or
+    empty: every annotation is as without --fix)."""
+    filled: dict[int, list[gapwheels.Fill]] = {}
+    for f in fills or []:
+        filled.setdefault(id(f.row), []).append(f)
     failing_ids = {id(r) for r in failing}
     locator = Locator(sources)
     out = []
     for level in ("error", "warning"):
         chosen = [r for r in rows if not r.ok and (id(r) in failing_ids) == (level == "error")]
         shown = chosen if len(chosen) <= ANNOTATION_LIMIT else chosen[: ANNOTATION_LIMIT - 1]
-        out += [annotation(r, targets, level, locator, advisory) for r in shown]
+        out += [annotation(r, targets, level, locator, advisory, filled.get(id(r))) for r in shown]
         if more := len(chosen) - len(shown):
             what = f"{more} more packages with gaps"  # never 1: a single extra would fit in the limit
             out.append(workflow_command(level, f"{what}; the log lists them all.", title=f"wheelgap: {what}"))
